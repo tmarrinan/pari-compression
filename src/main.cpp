@@ -47,6 +47,10 @@ int main(int argc, char **argv)
     // allocate output images
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
+    uint8_t *trle = new uint8_t[img_w * img_h];
+    
+    // buffer size for variable sized outputs
+    uint32_t size;
 
     // initialize image converter
     InitImageConverter(img_w, img_h);
@@ -58,6 +62,9 @@ int main(int argc, char **argv)
     // convert rgba image to dxt1 image
     RgbaToDxt1(rgba, dxt1);
     SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
+    
+    //convert rgba image to trle image
+    RgbaToTrle(rgba, trle, &size);
 
     // clean up
     FinalizeImageConverter();

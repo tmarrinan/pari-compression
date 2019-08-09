@@ -4,5 +4,6 @@
 void InitImageConverter(int width, int height);
 void RgbaToGrayscale(uint8_t *rgba, uint8_t *gray);
 void RgbaToDxt1(uint8_t *rgba, uint8_t *dxt1);
+void RgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size);
 void FinalizeImageConverter();
 

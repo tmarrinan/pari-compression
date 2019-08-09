@@ -1,9 +1,27 @@
 #include "imgconverter.h"
 
 static uint8_t *rgba_gpu_input;
+static uint8_t *gpu_temp;
+static uint8_t *gpu_sizes;
 static uint8_t *gpu_output;
+static uint32_t *final_size;
 static int img_w;
 static int img_h;
+
+__global__ void RgbaToGrayscaleKernel(uint8_t *rgba, uint8_t *gray, int width, int height);
+__global__ void RgbaToTileGrayscaleKernel(uint8_t *rgba, uint8_t *gray, int width, int height);
+__global__ void RgbaToDxt1Kernel(uint8_t *rgba, uint8_t *dxt1, int width, int height);
+__global__ void RgbaToTrleKernel(uint8_t *rgba, uint8_t *trle_tmp, uint8_t *trle_size, int width, int height);
+__global__ void FinalizeTrleKernel(uint8_t *trle_tmp, uint8_t *trle, uint8_t *trle_size, int width, int height, uint32_t *final_size);
+__device__ void ExtractTile4x4(uint32_t offset, uint8_t *pixels, int width, uint8_t out_tile[64]);
+__device__ void ExtractTile16x16(uint32_t offset, uint8_t *pixels, int width, uint8_t out_tile[1024]);
+__device__ void GetMinMaxColors(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[3]);
+__device__ uint16_t ColorTo565(uint8_t color[3]);
+__device__ uint32_t ColorDistance(uint8_t tile[64], int t_offset, uint8_t colors[16], int c_offset);
+__device__ uint32_t ColorIndices(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[3]);
+__device__ uint32_t ColorFromRgba(uint8_t *rgba, uint32_t offset);
+__device__ void WriteUint16(uint8_t *buffer, uint32_t offset, uint16_t value);
+__device__ void WriteUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
 
 
 __global__ void RgbaToGrayscaleKernel(uint8_t *rgba, uint8_t *gray, int width, int height)
@@ -45,7 +63,112 @@ __global__ void RgbaToTileGrayscaleKernel(uint8_t *rgba, uint8_t *gray, int widt
     }
 }
 
-__device__ void ExtractTile(uint32_t offset, uint8_t *pixels, int width, uint8_t out_tile[64])
+__global__ void RgbaToDxt1Kernel(uint8_t *rgba, uint8_t *dxt1, int width, int height)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (tid < width * height / 16)
+    {
+        uint8_t tile[64];
+        uint8_t color_min[3];
+        uint8_t color_max[3];
+        
+        int tile_x = tid % (width / 4);
+        int tile_y = tid / (width / 4);
+        int px_x = tile_x * 4;
+        int px_y = tile_y * 4;
+        
+        uint32_t offset = (px_y * width * 4) + (px_x * 4);
+        uint32_t write_pos = (tile_y * (width / 4) * 8) + (tile_x * 8);
+        
+        ExtractTile4x4(offset, rgba, width, tile);
+        GetMinMaxColors(tile, color_min, color_max);
+        WriteUint16(dxt1, write_pos, ColorTo565(color_max));
+        WriteUint16(dxt1, write_pos + 2, ColorTo565(color_min));
+        WriteUint32(dxt1, write_pos + 4, ColorIndices(tile, color_min, color_max));
+    }   
+}
+
+__global__ void RgbaToTrleKernel(uint8_t *rgba, uint8_t *trle_tmp, uint8_t *trle_size, int width, int height)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (tid < width * height / 256)
+    {
+        uint8_t tile[1024];
+        
+        int tile_x = tid % (width / 16);
+        int tile_y = tid / (width / 16);
+        int px_x = tile_x * 16;
+        int px_y = tile_y * 16;
+        
+        uint32_t offset = (px_y * width * 4) + (px_x * 4);
+        uint32_t write_pos = offset;
+        
+        ExtractTile16x16(offset, rgba, width, tile);
+        
+        int tile_px = 0;
+        uint32_t color;
+        uint32_t color_next;
+        uint8_t count;
+        uint8_t size = 0;
+        while (tile_px < 1024)
+        {
+            color = ColorFromRgba(tile, tile_px);
+            count = 1;
+            if (tile_px < 1020)
+            {
+                tile_px += 4;
+                color_next = ColorFromRgba(tile, tile_px);
+                while (color_next == color)
+                {
+                    tile_px += 4;
+                    count++;
+                    color_next = ColorFromRgba(tile, tile_px);
+                }
+            }
+            trle_tmp[write_pos + 0] = count;
+            trle_tmp[write_pos + 1] = tile[tile_px];
+            trle_tmp[write_pos + 2] = tile[tile_px + 1];
+            trle_tmp[write_pos + 3] = tile[tile_px + 2];
+            write_pos += 4;
+            size++;
+        }
+        trle_size[tid] = size;
+        printf("bye trle\n");
+    }
+}
+
+__global__ void FinalizeTrleKernel(uint8_t *trle_tmp, uint8_t *trle, uint8_t *trle_size, int width, int height, uint32_t *final_size)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (tid < width * height / 256)
+    {
+        int tile_x = tid % (width / 16);
+        int tile_y = tid / (width / 16);
+        int px_x = tile_x * 16;
+        int px_y = tile_y * 16;
+        
+        int i;
+        uint32_t offset = (px_y * width * 4) + (px_x * 4);
+        uint32_t write_pos = 0;
+        for (i = 0; i < tid; i++)
+        {
+            write_pos += trle_size[i] * 4;
+        }
+        
+        memcpy(trle + write_pos, trle_tmp + offset, trle_size[tid] * 4);
+        printf("<<<kernel %d>>> write pos %u, size: %u\n", tid, write_pos, trle_size[tid]);
+        if (tid == (width * height / 256) - 1)
+        {
+            printf("<<<kernel>>> write pos %u, size: %u\n", write_pos, trle_size[tid]);
+            *final_size = write_pos + (trle_size[tid] * 4);
+        }
+    }
+}
+
+__device__ void ExtractTile4x4(uint32_t offset, uint8_t *pixels, int width, uint8_t out_tile[64])
 {
     int i, j;
     for (j = 0; j < 4; j++)
@@ -53,6 +176,19 @@ __device__ void ExtractTile(uint32_t offset, uint8_t *pixels, int width, uint8_t
         for (i = 0; i < 16; i++)
         {
             out_tile[j * 16 + i] = pixels[offset + i];
+        }
+        offset += width * 4;
+    }
+}
+
+__device__ void ExtractTile16x16(uint32_t offset, uint8_t *pixels, int width, uint8_t out_tile[1024])
+{
+    int i, j;
+    for (j = 0; j < 16; j++)
+    {
+        for (i = 0; i < 64; i++)
+        {
+            out_tile[j * 64 + i] = pixels[offset + i];
         }
         offset += width * 4;
     }
@@ -145,6 +281,15 @@ __device__ uint32_t ColorIndices(uint8_t tile[64], uint8_t color_min[3], uint8_t
     return result;
 }
 
+__device__ uint32_t ColorFromRgba(uint8_t *rgba, uint32_t offset)
+{
+    uint32_t result = rgba[offset * 4] << 24;
+    result |= rgba[offset * 4 + 1] << 16;
+    result |= rgba[offset * 4 + 2] << 8;
+    result |= rgba[offset * 4 + 3];
+    return result;
+}
+
 __device__ void WriteUint16(uint8_t *buffer, uint32_t offset, uint16_t value)
 {
     buffer[offset + 0] = value & 0xFF;
@@ -159,38 +304,16 @@ __device__ void WriteUint32(uint8_t *buffer, uint32_t offset, uint32_t value)
     buffer[offset + 3] = (value >> 24) & 0xFF;
 }
 
-__global__ void RgbaToDxt1Kernel(uint8_t *rgba, uint8_t *dxt1, int width, int height)
-{
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (tid < width * height / 16)
-    {
-        uint8_t tile[64];
-        uint8_t color_min[3];
-        uint8_t color_max[3];
-        
-        int tile_x = tid % (width / 4);
-        int tile_y = tid / (width / 4);
-        int px_x = tile_x * 4;
-        int px_y = tile_y * 4;
-        
-        uint32_t offset = (px_y * width * 4) + (px_x * 4);
-        uint32_t write_pos = (tile_y * (width / 4) * 8) + (tile_x * 8);
-        
-        ExtractTile(offset, rgba, width, tile);
-        GetMinMaxColors(tile, color_min, color_max);
-        WriteUint16(dxt1, write_pos, ColorTo565(color_max));
-        WriteUint16(dxt1, write_pos + 2, ColorTo565(color_min));
-        WriteUint32(dxt1, write_pos + 4, ColorIndices(tile, color_min, color_max));
-    }   
-}
 
 void InitImageConverter(int width, int height)
 {
     img_w = width;
     img_h = height;
     cudaMalloc((void**)&rgba_gpu_input, img_w * img_h * 4);
+    cudaMalloc((void**)&gpu_temp, img_w * img_h * 4);
+    cudaMalloc((void**)&gpu_sizes, img_w * img_h / 256);
     cudaMalloc((void**)&gpu_output, img_w * img_h * 4);
+    cudaMalloc((void**)&final_size, sizeof(uint32_t));
 }
 
 void RgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
@@ -213,6 +336,19 @@ void RgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
     int num_blocks = ((img_w * img_h / 16) + block_size - 1) / block_size;
     RgbaToDxt1Kernel<<<num_blocks, block_size>>>(rgba_gpu_input, gpu_output, img_w, img_h);
     cudaMemcpy(dxt1, gpu_output, img_w * img_h / 2, cudaMemcpyDeviceToHost);
+}
+
+void RgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size)
+{
+    cudaMemcpy(rgba_gpu_input, rgba, img_w * img_h * 4, cudaMemcpyHostToDevice);
+    int block_size = 256;
+    int num_blocks = ((img_w * img_h / 256) + block_size - 1) / block_size;
+    RgbaToTrleKernel<<<num_blocks, block_size>>>(rgba_gpu_input, gpu_temp, gpu_sizes, img_w, img_h);
+    cudaDeviceSynchronize();
+    FinalizeTrleKernel<<<num_blocks, block_size>>>(gpu_temp, gpu_output, gpu_sizes, img_w, img_h, final_size);
+    cudaMemcpy(buffer_size, final_size, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    printf("TRLE Size: %u\n", *buffer_size);
+    //cudaMemcpy(dxt1, gpu_output, img_w * img_h / 2, cudaMemcpyDeviceToHost);
 }
 
 void FinalizeImageConverter()
