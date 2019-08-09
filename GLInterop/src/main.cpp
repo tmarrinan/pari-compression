@@ -4,9 +4,41 @@
 #include <GLFW/glfw3.h>
 #include "readpx.h" 
 
+typedef struct DdsPixelFormat {
+    uint32_t dw_size;
+    uint32_t dw_flags;
+    uint32_t dw_four_cc;
+    uint32_t dw_rgb_bit_count;
+    uint32_t dw_r_bit_mask;
+    uint32_t dw_g_bit_mask;
+    uint32_t dw_b_bit_mask;
+    uint32_t dw_a_bit_mask;
+} DdsPixelFormat;
+
+typedef struct DdsHeader {
+    uint32_t dw_magic;
+    uint32_t dw_size;
+    uint32_t dw_flags;
+    uint32_t dw_height;
+    uint32_t dw_width;
+    uint32_t dw_pitch_or_linear_size;
+    uint32_t dw_depth;
+    uint32_t dw_mip_map_count;
+    uint32_t dw_reserved1[11];
+    DdsPixelFormat ddspf;
+    uint32_t dw_caps;
+    uint32_t dw_caps2;
+    uint32_t dw_caps3;
+    uint32_t dw_caps4;
+    uint32_t dw_reserved2;
+} DdsHeader;
+
+void CreateDdsHeader(int width, int height, DdsHeader *header);
 void ReadPpm(const char *filename, uint32_t *width, uint32_t *height, uint8_t **pixels);
 void SavePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void SavePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
+void SaveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
+
 
 int main(int argc, char **argv)
 {
@@ -53,19 +85,25 @@ int main(int argc, char **argv)
 
     // Allocate output image buffers
     uint8_t *rgb_out = new uint8_t[img_w * img_h * 3];
+    uint8_t *rgba_out = new uint8_t[img_w * img_h * 4];
     uint8_t *gray_out = new uint8_t[img_w * img_h];
-    uint8_t *gpu_gray;
+    uint8_t *dxt1_out = new uint8_t[img_w * img_h / 2];
+    uint8_t *gpu_gray, *gpu_dxt1;
     AllocateGpuOutput((void**)&gpu_gray, img_w * img_h);
+    AllocateGpuOutput((void**)&gpu_dxt1, img_w * img_h / 2);
 
     // Convert on GPU then copy to CPU
     struct cudaGraphicsResource *resource;
     BindCudaResourceToTexture(&resource, texture);
     ReadRgbaTextureAsRgb(texture, rgb_out);
+    ReadRgbaTextureAsRgba(texture, rgba_out);
     ReadRgbaTextureAsGrayscale(&resource, texture, img_w, img_h, gpu_gray, gray_out);
+    ReadRgbaTextureAsDxt1(&resource, texture, img_w, img_h, gpu_dxt1, dxt1_out);
 
     // Write output images to disk
     SavePpm("out_rgb.ppm", img_w, img_h, rgb_out);
     SavePgm("out_gray.pgm", img_w, img_h, gray_out);
+    SaveDds("out_dxt1.dds", img_w, img_h, dxt1_out);
 
     // Clean up
     glfwPollEvents();
@@ -73,6 +111,31 @@ int main(int argc, char **argv)
     glfwTerminate();
 
     return 0;
+}
+
+void CreateDdsHeader(int width, int height, DdsHeader *header)
+{
+    header->dw_magic = 0x20534444; // 'DSS '
+    header->dw_size = 124;
+    header->dw_flags = 0x1007;
+    header->dw_height = height;
+    header->dw_width = width;
+    header->dw_pitch_or_linear_size = width * height / 2;
+    header->dw_depth = 0;
+    header->dw_mip_map_count = 0;
+
+    char four_cc[4] = {'D', 'X', 'T', '1'};
+    header->ddspf.dw_size = 32;
+    header->ddspf.dw_flags = 0x4;
+    header->ddspf.dw_four_cc = *(reinterpret_cast<uint32_t*>(four_cc));
+    header->ddspf.dw_rgb_bit_count = 16;
+    header->ddspf.dw_r_bit_mask = 0xF800;
+    header->ddspf.dw_g_bit_mask = 0x07E0;
+    header->ddspf.dw_b_bit_mask = 0x001F;
+    header->ddspf.dw_a_bit_mask = 0x0000;
+
+    header->dw_caps = 0x1000;
+    header->dw_caps2 = 0x0;
 }
 
 void ReadPpm(const char *filename, uint32_t *width, uint32_t *height, uint8_t **pixels)
@@ -120,6 +183,17 @@ void SavePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pix
     FILE *fp = fopen(filename, "wb");
     fprintf(fp, "P5\n%u %u\n255\n", width, height);
     fwrite(pixels, width * height, 1, fp);
+    fclose(fp);
+}
+
+void SaveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels)
+{
+    DdsHeader header;
+    CreateDdsHeader(width, height, &header);
+
+    FILE *fp = fopen(filename, "wb");
+    fwrite(&header, sizeof(DdsHeader), 1, fp);
+    fwrite(pixels, width * height / 2, 1, fp);
     fclose(fp);
 }
 
