@@ -1,4 +1,10 @@
 #include "imgconverter.h"
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/device_ptr.h>
+#include <thrust/for_each.h>
+#include <thrust/execution_policy.h>
+#include <cstdio>
 
 static uint8_t *rgba_gpu_input;
 static uint8_t *gpu_temp;
@@ -23,10 +29,95 @@ __device__ uint32_t ColorFromRgba(uint8_t *rgba, uint32_t offset);
 __device__ void WriteUint16(uint8_t *buffer, uint32_t offset, uint16_t value);
 __device__ void WriteUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
 
+struct grayscaleFunctor
+{
+	const uint8_t *rgba;
+        uint8_t *result;
+	size_t size;       
+	grayscaleFunctor( thrust::device_vector<uint8_t> const& rgba_input_t, thrust::device_vector<uint8_t>& gpu_output)
+        {
+          rgba = thrust::raw_pointer_cast(rgba_input_t.data());
+          result = thrust::raw_pointer_cast(gpu_output.data());
+         size = gpu_output.size();
+        } 
+	__host__ __device__
+	void operator()(int x)
+	{
+		if(x < size)
+		{
+			uint8_t red = rgba[4 * x + 0];
+			uint8_t green = rgba[4 * x + 1];
+			uint8_t blue = rgba[4 * x + 2];
+			result[x] = (uint8_t)(0.299 * red + 0.587 * green + 0.114 * blue);
+		}
+	}
+};
+
+struct dxt1Functor
+{
+        uint8_t *rgba;
+        uint8_t *dxt1;
+        int width;
+	size_t size;
+        dxt1Functor(int width_input, thrust::device_vector<uint8_t>& rgba_input, thrust::device_vector<uint8_t>& dxt1_output)
+        {
+          rgba = thrust::raw_pointer_cast(rgba_input.data());
+          dxt1 = thrust::raw_pointer_cast(dxt1_output.data());
+          width = width_input;
+	  size = dxt1_output.size();
+        }
+        __device__
+        void operator()(int x)
+        {
+		if (x < size)
+   		 {
+        		uint8_t tile[64];
+       			uint8_t color_min[3];
+        		uint8_t color_max[3];
+
+      			int tile_x = x % (width / 4);
+        		int tile_y = x / (width / 4);
+        		int px_x = tile_x * 4;
+        		int px_y = tile_y * 4;
+
+        		uint32_t offset = (px_y * width * 4) + (px_x * 4);
+        		uint32_t write_pos = (tile_y * (width / 4) * 8) + (tile_x * 8);
+
+       			ExtractTile4x4(offset, rgba, width, tile);
+        		GetMinMaxColors(tile, color_min, color_max);
+        		//printf("%u",ColorTo565(color_max));
+			WriteUint16(dxt1, write_pos, ColorTo565(color_max));
+       			/*WriteUint16(dxt1, write_pos + 2, ColorTo565(color_min));
+       			WriteUint32(dxt1, write_pos + 4, ColorIndices(tile, color_min, color_max));
+   		 	*/
+		}
+                
+        }
+};
+/*int main(int argc, char **argv)
+{
+    // read rgba image (ppm file)
+    int img_w;
+    int img_h;
+    uint8_t *rgba;
+    ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
+
+    // allocate output images
+    thrust::host_vector<uint8_t> gray(img_w*img_h);
+   // uint8_t *gray = new uint8_t[img_w * img_h];
+
+    // initialize image converter
+   //? InitImageConverter(img_w, img_h);
+    
+    // convert rgba image to grayscale image
+    RgbaToGrayscale(rgba, gray);
+    SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);
+}*/
+
 
 __global__ void RgbaToGrayscaleKernel(uint8_t *rgba, uint8_t *gray, int width, int height)
 {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < width * height)
     {
@@ -292,8 +383,10 @@ __device__ uint32_t ColorFromRgba(uint8_t *rgba, uint32_t offset)
 
 __device__ void WriteUint16(uint8_t *buffer, uint32_t offset, uint16_t value)
 {
-    buffer[offset + 0] = value & 0xFF;
-    buffer[offset + 1] = (value >> 8) & 0xFF;
+   printf("%u\n", value& 0xFF);
+   //buffer[offset+1] = value & 0xFF;
+	// buffer[offset + 0] = value & 0xFF;
+    //buffer[offset + 1] = (value >> 8) & 0xFF;
 }
 
 __device__ void WriteUint32(uint8_t *buffer, uint32_t offset, uint32_t value)
@@ -318,24 +411,41 @@ void InitImageConverter(int width, int height)
 
 void RgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
 {
-    cudaMemcpy(rgba_gpu_input, rgba, img_w * img_h * 4, cudaMemcpyHostToDevice);
-    int block_size = 256;
-    // normal way (each pixel individually)
-    int num_blocks = (img_w * img_h + block_size - 1) / block_size;
-    RgbaToGrayscaleKernel<<<num_blocks, block_size>>>(rgba_gpu_input, gpu_output, img_w, img_h);
+    // intialize all variables 
+    uint8_t *gray_device;
+
+    thrust::device_vector<uint8_t> rgba_input_t(rgba, rgba+img_w*img_h*4 );		
+    thrust::device_vector<uint8_t> gpu_output_t (img_w*img_h);
+    thrust::counting_iterator<size_t> it(0);    
+    //thrust for each n to specify number of threads and number of input and output vectors
+    thrust::for_each_n(thrust::device, it, gpu_output_t.size(), grayscaleFunctor(rgba_input_t,gpu_output_t));
+    
     // tile-based way (4x4 tiles of pixels per thread)
     //int num_blocks = ((img_w * img_h / 16) + block_size - 1) / block_size;
-    //RgbaToTileGrayscaleKernel<<<num_blocks, block_size>>>(rgba_gpu_input, gpu_output, img_w, img_h);
-    cudaMemcpy(gray, gpu_output, img_w * img_h, cudaMemcpyDeviceToHost);
+    //RgbaToTileGrayscaleKernel<<<num_blocks, block_size>>>(rgba_input_t, gpu_output, img_w, img_h);
+    
+    //copy back to host, Thrust can get rid of memcpy's
+    //thrust::copy(gpu_output_t.begin(), gpu_output_t.end(), gray.begin());
+    gray_device = thrust::raw_pointer_cast(&gpu_output_t[0]); 
+    cudaMemcpy(gray, gray_device, img_w * img_h, cudaMemcpyDeviceToHost);
 }
 
 void RgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
-    cudaMemcpy(rgba_gpu_input, rgba, img_w * img_h * 4, cudaMemcpyHostToDevice);
+    uint8_t *dxt1_device;
+    thrust::device_vector<uint8_t> rgba_input(rgba, rgba+img_w*img_h*4);
+    thrust::device_vector<uint8_t> dxt1_output(img_w*img_h /2);
+    thrust::counting_iterator<size_t> it(0);
+
+    thrust::for_each_n(thrust::device, it, dxt1_output.size(), dxt1Functor(img_w, rgba_input, dxt1_output));
+    dxt1_device = thrust::raw_pointer_cast(&dxt1_output[0]);
+    cudaMemcpy(dxt1, dxt1_device, img_w * img_h / 2, cudaMemcpyDeviceToHost);
+
+    /*cudaMemcpy(rgba_gpu_input, rgba, img_w * img_h * 4, cudaMemcpyHostToDevice);
     int block_size = 256;
     int num_blocks = ((img_w * img_h / 16) + block_size - 1) / block_size;
     RgbaToDxt1Kernel<<<num_blocks, block_size>>>(rgba_gpu_input, gpu_output, img_w, img_h);
-    cudaMemcpy(dxt1, gpu_output, img_w * img_h / 2, cudaMemcpyDeviceToHost);
+    cudaMemcpy(dxt1, gpu_output, img_w * img_h / 2, cudaMemcpyDeviceToHost);*/
 }
 
 void RgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size)
