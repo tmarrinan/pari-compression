@@ -42,8 +42,14 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
-
+    ReadPpm("resrc/red.ppm", &img_w, &img_h, &rgba);
+    uint8_t trleTest[64];
+   
+    for (int i=0; i<64; i++) 
+    {
+       trleTest[i] = 0;    // Initialize all elements to zero.
+    }
+    
     // allocate output images
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
@@ -64,8 +70,12 @@ int main(int argc, char **argv)
     SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
     
     //convert rgba image to trle image
-    RgbaToTrle(rgba, trle, &size);
-
+    RgbaToTrle(trleTest, trle, &size);
+    SaveDds("cuda_result_trle.dds", img_w,img_h,trle);
+    /*for(int i=0;i<img_w*img_h;i++)
+    {
+	    printf("%d, ",trle[i]);
+    }*/
     // clean up
     FinalizeImageConverter();
     

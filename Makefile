@@ -1,7 +1,7 @@
 CXX= g++
 CXX_FLAGS= -std=c++11
 NVCC= nvcc
-NVCC_FLAGS= 
+NVCC_FLAGS= -G -g 
 
 # Include and Library directories
 INC= -I./include
