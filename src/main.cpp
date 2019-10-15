@@ -42,40 +42,31 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/red.ppm", &img_w, &img_h, &rgba);
-    uint8_t trleTest[64];
-   
-    for (int i=0; i<64; i++) 
-    {
-       trleTest[i] = 0;    // Initialize all elements to zero.
-    }
-    
+    ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     // allocate output images
+  
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
-    
+   
     // buffer size for variable sized outputs
     uint32_t size;
 
     // initialize image converter
     InitImageConverter(img_w, img_h);
     
-    // convert rgba image to grayscale image
-    RgbaToGrayscale(rgba, gray);
-    SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);
+   // convert rgba image to grayscale image
+   /*RgbaToGrayscale(rgba, gray);
+    SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);*/
     
     // convert rgba image to dxt1 image
-    RgbaToDxt1(rgba, dxt1);
-    SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
+   // RgbaToDxt1(rgba, dxt1);
+   // SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
     
     //convert rgba image to trle image
-    RgbaToTrle(trleTest, trle, &size);
-    SaveDds("cuda_result_trle.dds", img_w,img_h,trle);
-    /*for(int i=0;i<img_w*img_h;i++)
-    {
-	    printf("%d, ",trle[i]);
-    }*/
+    RgbaToTrle(rgba, trle, &size);
+    //SaveDds("cuda_result_trle.dds", img_w,img_h,trle);
+
     // clean up
     FinalizeImageConverter();
     
