@@ -42,15 +42,17 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
+    ReadPpm("resrc/rletest_64x32.ppm", &img_w, &img_h, &rgba);
     // allocate output images
   
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
-   
+    uint8_t *rgba_trle = new uint8_t[img_w*img_h*4];
+    uint8_t *run_offsets = new uint8_t[img_w*img_h/256];
     // buffer size for variable sized outputs
     uint32_t size;
+    uint32_t inputSize = 39;
 
     // initialize image converter
     InitImageConverter(img_w, img_h);
@@ -64,7 +66,13 @@ int main(int argc, char **argv)
    // SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
     
     //convert rgba image to trle image
-    RgbaToTrle(rgba, trle, &size);
+    RgbaToTrle(rgba, trle, &size, run_offsets);
+     printf("size main: %d\n", size);
+    TrleToRgba(rgba_trle,trle,&inputSize,run_offsets);
+    for(int i=0; i<img_w*img_h/256; i++)
+    {
+	    printf("runs main %d , ", run_offsets[i]);
+    }
     //SaveDds("cuda_result_trle.dds", img_w,img_h,trle);
 
     // clean up
