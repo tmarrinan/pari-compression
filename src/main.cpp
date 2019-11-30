@@ -43,6 +43,7 @@ int main(int argc, char **argv)
     int img_h;
     uint8_t *rgba;
     ReadPpm("resrc/rletest_64x32.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
     // allocate output images
   
     uint8_t *gray = new uint8_t[img_w * img_h];
@@ -67,13 +68,19 @@ int main(int argc, char **argv)
     
     //convert rgba image to trle image
     RgbaToTrle(rgba, trle, &size, run_offsets);
-     printf("size main: %d\n", size);
-    TrleToRgba(rgba_trle,trle,&inputSize,run_offsets);
-    for(int i=0; i<img_w*img_h/256; i++)
+    TrleToRgba(rgba_trle,trle,&size,run_offsets);
+    for(int i=0; i<img_w*img_h*4; i++)
     {
-	    printf("runs main %d , ", run_offsets[i]);
+	   /* if(i< 32)
+	    {
+		    printf("%d, rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
+	    }*/
+	    if(rgba[i]-rgba_trle[i] != 0 & i<100)
+	    {
+    		printf("not same: %d : rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
+	    }
     }
-    //SaveDds("cuda_result_trle.dds", img_w,img_h,trle);
+    SaveDds("cuda_result_trle.dds", img_w,img_h,rgba_trle);
 
     // clean up
     FinalizeImageConverter();
