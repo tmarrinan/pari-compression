@@ -49,41 +49,43 @@ int main(int argc, char **argv)
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
-    uint8_t *rgba_trle = new uint8_t[img_w*img_h*4];
-    uint8_t *run_offsets = new uint8_t[img_w*img_h/256];
+    //uint8_t *rgba_trle = new uint8_t[img_w*img_h*4];
+    uint8_t *trle_offsets = new uint8_t[img_w * img_h / 256];
     // buffer size for variable sized outputs
     uint32_t size;
-    uint32_t inputSize = 39;
+    //uint32_t inputSize = 39;
 
     // initialize image converter
-    InitImageConverter(img_w, img_h);
+    initImageConverter(img_w, img_h);
     
-   // convert rgba image to grayscale image
-   /*RgbaToGrayscale(rgba, gray);
-    SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);*/
+    // convert rgba image to grayscale image
+    rgbaToGrayscale(rgba, gray);
+    SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);
     
     // convert rgba image to dxt1 image
-   // RgbaToDxt1(rgba, dxt1);
-   // SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
+    rgbaToDxt1(rgba, dxt1);
+    SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
+    
     
     //convert rgba image to trle image
-    RgbaToTrle(rgba, trle, &size, run_offsets);
-    TrleToRgba(rgba_trle,trle,&size,run_offsets);
+    rgbaToTrle(rgba, trle, &size, trle_offsets);
+    /*TrleToRgba(rgba_trle,trle,&size,run_offsets);
     for(int i=0; i<img_w*img_h*4; i++)
     {
-	   /* if(i< 32)
-	    {
-		    printf("%d, rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
-	    }*/
+	    //if(i< 32)
+	    //{
+		//    printf("%d, rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
+	    //}
 	    if(rgba[i]-rgba_trle[i] != 0 & i<100)
 	    {
     		printf("not same: %d : rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
 	    }
     }
     SaveDds("cuda_result_trle.dds", img_w,img_h,rgba_trle);
+    */
 
     // clean up
-    FinalizeImageConverter();
+    finalizeImageConverter();
     
     return 0;
 }
