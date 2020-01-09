@@ -50,7 +50,7 @@ int main(int argc, char **argv)
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
     //uint8_t *rgba_trle = new uint8_t[img_w*img_h*4];
-    uint8_t *trle_offsets = new uint8_t[img_w * img_h / 256];
+    uint32_t *trle_offsets = new uint32_t[img_w * img_h / 256];
     // buffer size for variable sized outputs
     uint32_t size;
     //uint32_t inputSize = 39;
