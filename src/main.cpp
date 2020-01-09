@@ -33,6 +33,7 @@ typedef struct DdsHeader {
 
 void CreateDdsHeader(int width, int height, DdsHeader *header);
 void ReadPpm(const char *filename, int *width, int *height, uint8_t **pixels);
+void SavePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void SavePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void SaveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 
@@ -44,16 +45,15 @@ int main(int argc, char **argv)
     uint8_t *rgba;
     ReadPpm("resrc/rletest_64x32.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
+    
     // allocate output images
-  
     uint8_t *gray = new uint8_t[img_w * img_h];
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
-    //uint8_t *rgba_trle = new uint8_t[img_w*img_h*4];
+    uint8_t *rgb_copy = new uint8_t[img_w*img_h*3];
     uint32_t *trle_offsets = new uint32_t[img_w * img_h / 256];
     // buffer size for variable sized outputs
     uint32_t size;
-    //uint32_t inputSize = 39;
 
     // initialize image converter
     initImageConverter(img_w, img_h);
@@ -69,20 +69,10 @@ int main(int argc, char **argv)
     
     //convert rgba image to trle image
     rgbaToTrle(rgba, trle, &size, trle_offsets);
-    /*TrleToRgba(rgba_trle,trle,&size,run_offsets);
-    for(int i=0; i<img_w*img_h*4; i++)
-    {
-	    //if(i< 32)
-	    //{
-		//    printf("%d, rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
-	    //}
-	    if(rgba[i]-rgba_trle[i] != 0 & i<100)
-	    {
-    		printf("not same: %d : rgba %d : trle %d \n", i, rgba[i], rgba_trle[i]);
-	    }
-    }
-    SaveDds("cuda_result_trle.dds", img_w,img_h,rgba_trle);
-    */
+    
+    // convert trle to rgba
+    trleToRgb(trle, rgb_copy, size, trle_offsets);
+    SavePpm("cuda_result_rgb.ppm", img_w, img_h, rgb_copy);
 
     // clean up
     finalizeImageConverter();
@@ -145,6 +135,14 @@ void ReadPpm(const char *filename, int *width, int *height, uint8_t **pixels)
         (*pixels)[4 * i + 2] = tmp[3 * i + 2];
         (*pixels)[4 * i + 3] = 255;
     }
+}
+
+void SavePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels)
+{
+    FILE *fp = fopen(filename, "wb");
+    fprintf(fp, "P6\n%u %u\n255\n", width, height);
+    fwrite(pixels, width * height * 3, 1, fp);
+    fclose(fp);
 }
 
 void SavePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels)

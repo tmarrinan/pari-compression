@@ -227,20 +227,18 @@ struct FinalizeTrleFunctor
     }
 };
 
-struct DecryptTrleFunctor
+struct DecodeTrleFunctor
 {
     const uint8_t *trle;
     const uint32_t *sums; // prefix sum array of num_runs
-    uint8_t *rgba;
-    uint32_t size;
+    uint8_t *rgb;
     int width;
     int height;
-    DecryptTrleFunctor(int width_input, int height_input, uint32_t size_input, thrust::device_vector<uint8_t> const& trle_input, thrust::device_vector<uint32_t> const& sums_input, thrust::device_vector<uint8_t>& rgba_output)
+    DecodeTrleFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& trle_input, thrust::device_vector<uint32_t> const& sums_input, thrust::device_vector<uint8_t>& rgb_output)
     {
         trle = thrust::raw_pointer_cast(trle_input.data());
         sums = thrust::raw_pointer_cast(sums_input.data());
-        rgba = thrust::raw_pointer_cast(rgba_output.data());
-        size = size_input;
+        rgb = thrust::raw_pointer_cast(rgb_output.data());
         width = width_input;
         height = height_input;
     }
@@ -248,8 +246,47 @@ struct DecryptTrleFunctor
     {
         // px_ (x and y pixel indices)
         // tile_ (x and y tile indices)
-        if (thread_id < size)
+        if (thread_id < width * height / 256)
         {
+            int i;
+            int tile_x = thread_id % (width / 16); 
+            int tile_y = thread_id / (width / 16);
+            int px_x = tile_x * 16;
+            int px_y = tile_y * 16;
+
+            // index of first pixel in our current tile
+            uint32_t rgb_offset = (px_y * width * 3) + (px_x * 3);
+            int inner_count = 0;
+
+            uint32_t trle_offset = sums[thread_id] * 4;
+            uint16_t run_length;
+
+            // until all 256 pixels are decoded
+            while (inner_count < 256)
+            {
+                run_length = (uint16_t)trle[trle_offset] + 1;
+                printf("THREAD %d: length=%u, color=(%u,%u,%u)\n", thread_id, run_length, trle[trle_offset + 1], trle[trle_offset + 2], trle[trle_offset + 3]); 
+                for (i = 0; i < run_length; i++)
+                {
+                    rgb[rgb_offset] = trle[trle_offset + 1];
+                    rgb[rgb_offset + 1] = trle[trle_offset + 2];
+                    rgb[rgb_offset + 2] = trle[trle_offset + 3];
+                    inner_count++;
+                    if (inner_count % 16 == 0)
+                    {
+                        rgb_offset += (width - 15) * 3;
+                    }
+                    else
+                    {
+                        rgb_offset += 3;
+                    }
+                }
+
+                trle_offset += 4;
+            }
+            
+            
+            
             /*int tile_x = thread_id % (width / 16);
             int tile_y = thread_id / (width / 16);
             int px_x = tile_x * 16;
@@ -526,6 +563,21 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     {
         printf("length: %u, rgb(%u, %u, %u)\n", trle[i*4], trle[i*4+1], trle[i*4+2], trle[i*4+3]);
     }
+}
+
+void trleToRgb(uint8_t *trle, uint8_t *rgb, uint32_t buffer_size, uint32_t *run_offsets)
+{
+    const int k = 256; // pixels per tile
+    const int n = (img_w * img_h) / k; // number of tiles
+    thrust::copy(trle, trle + buffer_size, rgba_input_ptr->begin()); // change to image_input_ptr
+    thrust::copy(run_offsets, run_offsets + n, sums->begin());
+    thrust::counting_iterator<size_t> it(0);
+
+    // thrust for_each_n - one thread per tile
+    thrust::for_each_n(thrust::device, it, n, DecodeTrleFunctor(img_w, img_h, *rgba_input_ptr, *sums, *image_output_ptr));
+
+    // copy image data back to host
+    thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h * 3), rgb);
 }
 
 /*
