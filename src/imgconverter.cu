@@ -20,7 +20,7 @@ static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
 
 
-__host__ __device__ void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64]);
+__host__ __device__ void extractTile4x4(const uint8_t *pixels, int x, int y, int img_width, int img_height, uint8_t out_tile[64]);
 __host__ __device__ void extractTile16x16(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[1024]);
 __host__ __device__ void getMinMaxColors(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[3]);
 __host__ __device__ uint16_t colorTo565(uint8_t color[3]);
@@ -60,14 +60,20 @@ struct Dxt1Functor
 {
     const uint8_t *rgba;
     uint8_t *dxt1;
-    int width;
+    int img_width;
+    int img_height;
+    int dxt1_width;
+    int dxt1_height;
     size_t size;
-    Dxt1Functor(int width_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& dxt1_output)
+    Dxt1Functor(int width_in, int height_in, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& dxt1_output)
     {
         rgba = thrust::raw_pointer_cast(rgba_input.data());
         dxt1 = thrust::raw_pointer_cast(dxt1_output.data());
-        width = width_input;
-        size = rgba_input.size() / 16;
+        img_width = width_in;
+        img_height = height_in;
+        dxt1_width = (img_width + 3) & ~0x03; // round up to nearest multiple of 4
+        dxt1_height = (img_height + 3) & ~0x03; // round up to nearest multiple of 4
+        size = dxt1_width * dxt1_height / 16;
     }
     __host__ __device__ void operator()(int thread_id)
     {
@@ -79,15 +85,14 @@ struct Dxt1Functor
             uint8_t color_min[3];
             uint8_t color_max[3];
 
-      	    int tile_x = thread_id % (width / 4);
-            int tile_y = thread_id / (width / 4);
+      	    int tile_x = thread_id % (dxt1_width / 4);
+            int tile_y = thread_id / (dxt1_width / 4);
             int px_x = tile_x * 4;
             int px_y = tile_y * 4;
 
-            uint32_t offset = (px_y * width * 4) + (px_x * 4);
-            uint32_t write_pos = (tile_y * (width / 4) * 8) + (tile_x * 8);
+            uint32_t write_pos = (tile_y * (dxt1_width / 4) * 8) + (tile_x * 8);
 
-            extractTile4x4(offset, rgba, width, tile);
+            extractTile4x4(rgba, px_x, px_y, img_width, img_height, tile);
             getMinMaxColors(tile, color_min, color_max);
             writeUint16(dxt1, write_pos, colorTo565(color_max));
        	    writeUint16(dxt1, write_pos + 2, colorTo565(color_min));
@@ -285,19 +290,31 @@ struct DecodeTrleFunctor
 };
 
 
-void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64])
+void extractTile4x4(const uint8_t *pixels, int x, int y, int img_width, int img_height, uint8_t out_tile[64])
 {
     int i, j;
-    for (j = 0; j < 4; j++)
+    int rows = min(img_height - y, 4);
+    int cols = min(img_width - x, 4);
+    uint8_t first[4];
+    memcpy(first, pixels + ((y * img_width * 4) + (x * 4)), 4);
+    for (i = 0; i < rows; i++)
     {
-        for (i = 0; i < 16; i++)
+        memcpy(out_tile + (i * 16), pixels + (((y + i) * img_width * 4) + (x * 4)), cols * 4);
+        for (j = cols; j < 4; j++)
         {
-            out_tile[j * 16 + i] = pixels[offset + i];
+            memcpy(out_tile + ((i * 16) + (j * 4)), first, 4);
         }
-        offset += width * 4;
+    }
+    for (i = rows; i < 4; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            memcpy(out_tile + ((i * 16) + (j * 4)), first, 4);
+        }
     }
 }
 
+// TODO: change to match Tile4x4
 void extractTile16x16(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[1024])
 {
     int i, j;
@@ -438,12 +455,26 @@ void initImageConverter(int width, int height)
 {
     img_w = width;
     img_h = height;
+    //img_w = (width + 15) & ~0x0f; // round up to nearest multiple of 16
+    //img_h = (height + 15) & ~0x0f; // round up to nearest multiple of 16
 
     image_input_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
     image_output_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
     runs = new thrust::device_vector<uint8_t>(img_w * img_h);
     num_runs = new thrust::device_vector<uint16_t>((img_w * img_h) / 256);
     sums = new thrust::device_vector<uint32_t>((img_w * img_h) / 256);
+}
+
+void getDxt1Dimensions(int *dxt1_width, int *dxt1_height)
+{
+    *dxt1_width = (img_w + 3) & ~0x03; // round up to nearest multiple of 4
+    *dxt1_height = (img_h + 3) & ~0x03; // round up to nearest multiple of 4
+}
+
+void getTrleDimensions(int *trle_width, int *trle_height)
+{
+    *trle_width = (img_w + 15) & ~0x0f; // round up to nearest multiple of 16
+    *trle_height = (img_h + 15) & ~0x0f; // round up to nearest multiple of 16
 }
 
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
@@ -467,16 +498,18 @@ void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
     uint64_t start = currentTime();
 
+    const int dxt1_width = (img_w + 3) & ~0x03; // round up to nearest multiple of 4
+    const int dxt1_height = (img_h + 3) & ~0x03; // round up to nearest multiple of 4
     const int k = 16; // pixels per tile
-    const int n = (img_w * img_h) / k; // number of tiles
+    const int n = (dxt1_width * dxt1_height) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
 
     // thrust for_each_n - one thread per 4x4 tile
-    thrust::for_each_n(thrust::device, it, n, Dxt1Functor(img_w, *image_input_ptr, *image_output_ptr));
+    thrust::for_each_n(thrust::device, it, n, Dxt1Functor(img_w, img_h, *image_input_ptr, *image_output_ptr));
 
     // copy image data back to host
-    thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h / 2), dxt1);
+    thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (dxt1_width * dxt1_height / 2), dxt1);
 
     uint64_t end = currentTime();
     printf("THRUST - DXT1 (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
@@ -486,6 +519,8 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
 {
     uint64_t start = currentTime();
 
+    const int trle_width = (img_w + 15) & ~0x0f; // round up to nearest multiple of 16
+    const int trle_height = (img_h + 15) & ~0x0f; // round up to nearest multiple of 16
     const int k = 256; // pixels per tile
     const int n = (img_w * img_h) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());

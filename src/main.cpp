@@ -43,32 +43,35 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
+    ReadPpm("resrc/md_section_257x257.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
-    
-    // allocate output images
-    uint8_t *gray = new uint8_t[img_w * img_h];
-    uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
-    uint8_t *trle = new uint8_t[img_w * img_h];
-    uint8_t *rgb_copy = new uint8_t[img_w*img_h*3];
-    uint32_t *trle_offsets = new uint32_t[img_w * img_h / 256];
-    // buffer size for variable sized outputs
-    uint32_t size;
-
+   
     // initialize image converter
     initImageConverter(img_w, img_h);
-    
+
+    // allocate output images
+    int dxt1_w, dxt1_h, trle_w, trle_h;
+    getDxt1Dimensions(&dxt1_w, &dxt1_h);
+    getTrleDimensions(&trle_w, &trle_h);
+    uint8_t *gray = new uint8_t[img_w * img_h];
+    uint8_t *dxt1 = new uint8_t[dxt1_w * dxt1_h / 2];
+    uint8_t *trle = new uint8_t[trle_w * trle_h];
+    uint32_t *trle_offsets = new uint32_t[trle_w * trle_h / 256];
+    uint32_t size; // buffer size for variable sized outputs
+    uint8_t *rgb_copy = new uint8_t[img_w * img_h * 3];
+
     // convert rgba image to grayscale image
     rgbaToGrayscale(rgba, gray);
     SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);
     
     // convert rgba image to dxt1 image
     rgbaToDxt1(rgba, dxt1);
-    SaveDds("cuda_result_dxt1.dds", img_w, img_h, dxt1);
+    SaveDds("cuda_result_dxt1.dds", dxt1_w, dxt1_h, dxt1);
     
     
-    //convert rgba image to trle image
+    // convert rgba image to trle image
     rgbaToTrle(rgba, trle, &size, trle_offsets);
     
     // convert trle to rgba

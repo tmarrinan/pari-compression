@@ -4,6 +4,8 @@
 #include <time.h>
 
 void initImageConverter(int width, int height);
+void getDxt1Dimensions(int *dxt1_width, int *dxt1_height);
+void getTrleDimensions(int *trle_width, int *trle_height);
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray);
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1);
 void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *run_offsets);
