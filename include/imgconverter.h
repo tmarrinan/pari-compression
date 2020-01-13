@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
+#include <time.h>
 
 void initImageConverter(int width, int height);
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray);

@@ -1,20 +1,15 @@
-#include "imgconverter.h"
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
+#include <thrust/copy.h>
 #include <thrust/for_each.h>
-#include <thrust/execution_policy.h>
-#include <cstdio>
 #include <thrust/reduce.h>
-#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
-#include <thrust/copy.h>
-#include <thrust/execution_policy.h>
-#include <iostream>
-#include <tr1/functional>
-#include <math.h>
+
+#include "imgconverter.h"
 
 static int img_w;
 static int img_h;
@@ -24,7 +19,6 @@ static thrust::device_vector<uint8_t> *runs;
 static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
 
-using namespace thrust::placeholders;
 
 __host__ __device__ void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64]);
 __host__ __device__ void extractTile16x16(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[1024]);
@@ -35,6 +29,9 @@ __host__ __device__ uint32_t colorIndices(uint8_t tile[64], uint8_t color_min[3]
 __host__ __device__ uint32_t colorFromRgba(const uint8_t *rgba, uint32_t offset);
 __host__ __device__ void writeUint16(uint8_t *buffer, uint32_t offset, uint16_t value);
 __host__ __device__ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
+
+uint64_t currentTime();
+
 
 struct GrayscaleFunctor
 {
@@ -427,6 +424,16 @@ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value)
 
 // ----------------------------------------------------------------------------- //
 
+uint64_t currentTime()
+{
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (ts.tv_sec * 1000000ull) + (ts.tv_nsec / 1000ull);
+}
+
+// ----------------------------------------------------------------------------- //
+
+
 void initImageConverter(int width, int height)
 {
     img_w = width;
@@ -441,6 +448,8 @@ void initImageConverter(int width, int height)
 
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
 {
+    uint64_t start = currentTime();
+
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
 
@@ -449,10 +458,15 @@ void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h), gray);
+
+    uint64_t end = currentTime();
+    printf("THRUST - Grayscale (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
 
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
+    uint64_t start = currentTime();
+
     const int k = 16; // pixels per tile
     const int n = (img_w * img_h) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
@@ -463,10 +477,15 @@ void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h / 2), dxt1);
+
+    uint64_t end = currentTime();
+    printf("THRUST - DXT1 (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
 
 void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *run_offsets)
 {
+    uint64_t start = currentTime();
+
     const int k = 256; // pixels per tile
     const int n = (img_w * img_h) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
@@ -476,7 +495,7 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     thrust::for_each_n(thrust::device, it, img_w * img_h, TrleFunctor(img_w, img_h, *image_input_ptr, *runs));
 
     // thrust reduce_by_key - sum number of new runs per tile
-    thrust::reduce_by_key(thrust::device, thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(0), _1 / k), thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(n * k), _1 / k), runs->begin(), thrust::discard_iterator<uint16_t>(), num_runs->begin());
+    thrust::reduce_by_key(thrust::device, thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(0), thrust::placeholders::_1 / k), thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(n * k), thrust::placeholders::_1 / k), runs->begin(), thrust::discard_iterator<uint16_t>(), num_runs->begin());
 
     // thrust inclusive_scan (prefix sum) - create array where each index is sum of all numbers in num_runs before its index
     // results in the offset into our final trle array
@@ -493,21 +512,29 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (*buffer_size), trle);
+
+    uint64_t end = currentTime();
+    printf("THRUST - TRLE (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
 
 void trleToRgb(uint8_t *trle, uint8_t *rgb, uint32_t buffer_size, uint32_t *run_offsets)
 {
+    uint64_t start = currentTime(); 
+
     const int k = 256; // pixels per tile
     const int n = (img_w * img_h) / k; // number of tiles
     thrust::copy(trle, trle + buffer_size, image_input_ptr->begin());
     thrust::copy(run_offsets, run_offsets + n, sums->begin());
     thrust::counting_iterator<size_t> it(0);
 
-    // thrust for_each_n - one thread per tile
+    // thrust for_each_n - one thread per 16x16 tile
     thrust::for_each_n(thrust::device, it, n, DecodeTrleFunctor(img_w, img_h, *image_input_ptr, *sums, *image_output_ptr));
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h * 3), rgb);
+
+    uint64_t end = currentTime();
+    printf("THRUST - Decode TRLE (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
 
 void finalizeImageConverter()
