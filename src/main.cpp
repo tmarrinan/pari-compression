@@ -43,8 +43,8 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/rletest_52x24.ppm", &img_w, &img_h, &rgba);
-    //ReadPpm("resrc/md_section_257x257.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/rletest_52x24.ppm", &img_w, &img_h, &rgba);
+    ReadPpm("resrc/md_section_257x257.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     uint8_t *trle = new uint8_t[trle_maxsize];
     uint32_t *trle_offsets = new uint32_t[trle_offsetsize];
     uint32_t size; // buffer size for variable sized outputs
-    uint8_t *rgb_copy = new uint8_t[img_w * img_h * 3];
+    uint8_t *rgb_copy = new uint8_t[trle_w * trle_h * 3];
 
     // convert rgba image to grayscale image
     rgbaToGrayscale(rgba, gray);
@@ -75,14 +75,15 @@ int main(int argc, char **argv)
     
     // convert rgba image to trle image
     rgbaToTrle(rgba, trle, &size, trle_offsets);
-    for (int i = 0; i < size; i+=4)
-    {
-        printf("TRLE run: length=%u, rgb=(%u,%u,%u)\n", (uint16_t)trle[i] + 1, trle[i + 1], trle[i + 2], trle[i + 3]);
-    }
+    printf("Total TRLE size: %u, number of runs: %u, compression ratio: %.3lf:1\n", size + trle_offsetsize, size / 4, (double)(img_w * img_h * 4) / (double)(size + trle_offsetsize));
+    //for (int i = 0; i < size; i+=4)
+    //{
+    //    printf("TRLE run: length=%u, rgb=(%u,%u,%u)\n", (uint16_t)trle[i] + 1, trle[i + 1], trle[i + 2], trle[i + 3]);
+    //}
 
     // convert trle to rgba
     trleToRgb(trle, rgb_copy, size, trle_offsets);
-    SavePpm("cuda_result_rgb.ppm", img_w, img_h, rgb_copy);
+    SavePpm("cuda_result_rgb.ppm", trle_w, trle_h, rgb_copy);
 
     // clean up
     finalizeImageConverter();
