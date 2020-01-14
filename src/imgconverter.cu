@@ -26,7 +26,7 @@ __host__ __device__ void getMinMaxColors(uint8_t tile[64], uint8_t color_min[3],
 __host__ __device__ uint16_t colorTo565(uint8_t color[3]);
 __host__ __device__ uint32_t colorDistance(uint8_t tile[64], int t_offset, uint8_t colors[16], int c_offset);
 __host__ __device__ uint32_t colorIndices(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[3]);
-__host__ __device__ uint32_t colorFromRgba(const uint8_t *rgba, uint32_t offset);
+__host__ __device__ uint32_t colorFromRgba(const uint8_t *rgba, int width, int height, int x, int y);
 __host__ __device__ void writeUint16(uint8_t *buffer, uint32_t offset, uint16_t value);
 __host__ __device__ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
 
@@ -38,11 +38,11 @@ struct GrayscaleFunctor
     const uint8_t *rgba;
     uint8_t *gray;
     size_t size;       
-    GrayscaleFunctor(thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& gray_output)
+    GrayscaleFunctor(thrust::device_vector<uint8_t> const& rgba_in, thrust::device_vector<uint8_t>& gray_out)
     {
-        rgba = thrust::raw_pointer_cast(rgba_input.data());
-        gray = thrust::raw_pointer_cast(gray_output.data());
-        size = rgba_input.size() / 4;
+        rgba = thrust::raw_pointer_cast(rgba_in.data());
+        gray = thrust::raw_pointer_cast(gray_out.data());
+        size = rgba_in.size() / 4;
     } 
     __host__ __device__	void operator()(int thread_id)
     {
@@ -65,10 +65,10 @@ struct Dxt1Functor
     int dxt1_width;
     int dxt1_height;
     size_t size;
-    Dxt1Functor(int width_in, int height_in, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& dxt1_output)
+    Dxt1Functor(int width_in, int height_in, thrust::device_vector<uint8_t> const& rgba_in, thrust::device_vector<uint8_t>& dxt1_out)
     {
-        rgba = thrust::raw_pointer_cast(rgba_input.data());
-        dxt1 = thrust::raw_pointer_cast(dxt1_output.data());
+        rgba = thrust::raw_pointer_cast(rgba_in.data());
+        dxt1 = thrust::raw_pointer_cast(dxt1_out.data());
         img_width = width_in;
         img_height = height_in;
         dxt1_width = (img_width + 3) & ~0x03; // round up to nearest multiple of 4
@@ -105,35 +105,42 @@ struct TrleFunctor
 {
     const uint8_t *rgba;
     uint8_t *runs; // boolean array, one index per pixel (1 indicates start of a new run)
-    int width;
-    int height;
-    TrleFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& runs_output)
+    int img_width;
+    int img_height;
+    int trle_width;
+    int trle_height;
+    size_t size;
+    TrleFunctor(int width_in, int height_in, thrust::device_vector<uint8_t> const& rgba_in, thrust::device_vector<uint8_t>& runs_out)
     {
-        rgba = thrust::raw_pointer_cast(rgba_input.data());
-        runs = thrust::raw_pointer_cast(runs_output.data());
-        width = width_input;
-        height = height_input;
+        rgba = thrust::raw_pointer_cast(rgba_in.data());
+        runs = thrust::raw_pointer_cast(runs_out.data());
+        img_width = width_in;
+        img_height = height_in;
+        trle_width = (img_width + 15) & ~0x0f; // round up to nearest multiple of 16
+        trle_height = (img_height + 15) & ~0x0f; // round up to nearest multiple of 16
+        size = trle_width * trle_height;
     }
     __host__ __device__ void operator()(int thread_id)
     {
         // px_ (x and y pixel indices)
         // tile_ (x and y tile indices)
         // inner_ (x and y indices within its tile)
-        if (thread_id < (width * height))
+        if (thread_id < size)
         {
-            int px_x = thread_id  % width;
-            int px_y = thread_id / width;
+            int px_x = thread_id % trle_width;
+            int px_y = thread_id / trle_width;
 
             int tile_x = px_x / 16;
             int tile_y = px_y / 16;
-            int tile_idx = tile_y * (width / 16) + tile_x;
+            int tile_idx = tile_y * (trle_width / 16) + tile_x;
 
             int inner_x = px_x % 16;
             int inner_y = px_y % 16;
 
             uint32_t color;
             uint32_t color_prev;
-            uint32_t prev;
+            uint32_t prev_x;
+            uint32_t prev_y;
 			
             // first pixel in tile always starts new run
             if(inner_x == 0 && inner_y == 0) 
@@ -142,14 +149,19 @@ struct TrleFunctor
             }
             else
             {
-                prev = thread_id - 1;
                 if (inner_x == 0) // on new row; go to last pixel in tile on previous row
                 {
-                    prev = (thread_id - width) + 15;
-                }	
+                    prev_x = px_x + 15;
+                    prev_y = px_y - 1;
+                }
+                else // go left one pixel
+                {
+                    prev_x = px_x - 1;
+                    prev_y = px_y;
+                }    
 
-                color = colorFromRgba(rgba, thread_id);
-                color_prev = colorFromRgba(rgba, prev);
+                color = colorFromRgba(rgba, img_width, img_height, px_x, px_y);
+                color_prev = colorFromRgba(rgba, img_width, img_height, prev_x, prev_y);
 
                 // index so a block is consecutive
                 runs[(tile_idx * 256) + (inner_y * 16) + inner_x] = (uint8_t)(color_prev != color);
@@ -165,27 +177,33 @@ struct FinalizeTrleFunctor
     const uint16_t *num_runs; // total number of runs per tile
     const uint32_t *sums; // prefix sum array of num_runs
     uint8_t *trle;
-    int width;
-    int height;
-    FinalizeTrleFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t> const& runs_input, thrust::device_vector<uint16_t>& num_runs_input, thrust::device_vector<uint32_t> const& sums_input, thrust::device_vector<uint8_t>& trle_output)  
+    int img_width;
+    int img_height;
+    int trle_width;
+    int trle_height;
+    size_t size;
+    FinalizeTrleFunctor(int width_in, int height_in, thrust::device_vector<uint8_t> const& rgba_in, thrust::device_vector<uint8_t> const& runs_in, thrust::device_vector<uint16_t>& num_runs_in, thrust::device_vector<uint32_t> const& sums_in, thrust::device_vector<uint8_t>& trle_out)  
     {
-        rgba = thrust::raw_pointer_cast(rgba_input.data());
-        runs = thrust::raw_pointer_cast(runs_input.data());
-        num_runs = thrust::raw_pointer_cast(num_runs_input.data());
-        sums = thrust::raw_pointer_cast(sums_input.data());
-        trle = thrust::raw_pointer_cast(trle_output.data());
-        width = width_input;
-        height = height_input;
+        rgba = thrust::raw_pointer_cast(rgba_in.data());
+        runs = thrust::raw_pointer_cast(runs_in.data());
+        num_runs = thrust::raw_pointer_cast(num_runs_in.data());
+        sums = thrust::raw_pointer_cast(sums_in.data());
+        trle = thrust::raw_pointer_cast(trle_out.data());
+        img_width = width_in;
+        img_height = height_in;
+        trle_width = (img_width + 15) & ~0x0f; // round up to nearest multiple of 16
+        trle_height = (img_height + 15) & ~0x0f; // round up to nearest multiple of 16
+        size = trle_width * trle_height / 256;
     }
     __host__  __device__ void operator()(int thread_id)
     {
         // px_ (x and y pixel indices)
         // tile_ (x and y tile indices)
-        if (thread_id < (width * height / 256))
+        if (thread_id < size)
         {
             int i;
-            int tile_x = thread_id % (width / 16);
-            int tile_y = thread_id / (width / 16);
+            int tile_x = thread_id % (trle_width / 16);
+            int tile_y = thread_id / (trle_width / 16);
             int px_x = tile_x * 16;
             int px_y = tile_y * 16;
 
@@ -193,13 +211,13 @@ struct FinalizeTrleFunctor
             uint32_t y_increase = 0;
 
             // rgba index of first pixel in our current tile
-            uint32_t offset = (px_y * width * 4) + (px_x * 4);
+            uint32_t offset = (px_y * img_width * 4) + (px_x * 4);
 
             uint32_t run_count;
             uint32_t total_run_count = 0;
 
             // number of pixels in past tiles (index into runs)
-            uint32_t index = (tile_x * 256) + (tile_y * (width / 16) * 256) ;
+            uint32_t index = (tile_y * (trle_width / 16) * 256) + (tile_x * 256) ;
 
             // for all the runs in the tile
             for (i = 0; i < num_runs[thread_id]; i++)
@@ -223,7 +241,7 @@ struct FinalizeTrleFunctor
 				trle[(sums[thread_id] * 4) + ((i * 4) + 2)] = rgba[offset + y_increase + x_increase + 1];
 				trle[(sums[thread_id] * 4) + ((i * 4) + 3)] = rgba[offset + y_increase + x_increase + 2];
                 x_increase = (total_run_count % 16) * 4;
-                y_increase = (total_run_count / 16) * 4 * width;
+                y_increase = (total_run_count / 16) * 4 * img_width;
             }
         }
     }
@@ -415,13 +433,24 @@ uint32_t colorIndices(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[
     return result;
 }
 
-uint32_t colorFromRgba(const uint8_t *rgba, uint32_t offset)
+uint32_t colorFromRgba(const uint8_t *rgba, int width, int height, int x, int y)
 {
+    int ix = x;
+    int iy = y;
+    if (iy >= height)
+    {
+        iy = height - 1;
+        ix = ix + (15 - (ix % 16));
+    }
+    ix = min(ix, width - 1);
+
+    int offset = (iy * width * 4) + (ix * 4);
+
+    uint32_t result = rgba[offset] << 24;
+    result |= rgba[offset + 1] << 16;
+    result |= rgba[offset + 2] << 8;
+    result |= rgba[offset + 3];
     
-    uint32_t result = rgba[offset * 4] << 24;
-    result |= rgba[offset * 4 + 1] << 16;
-    result |= rgba[offset * 4 + 2] << 8;
-    result |= rgba[offset * 4 + 3];
     return result;
 }
 
@@ -455,26 +484,30 @@ void initImageConverter(int width, int height)
 {
     img_w = width;
     img_h = height;
-    //img_w = (width + 15) & ~0x0f; // round up to nearest multiple of 16
-    //img_h = (height + 15) & ~0x0f; // round up to nearest multiple of 16
+
+    int out_width = (img_w + 15) & ~0x0f; // round up to nearest multiple of 16
+    int out_height = (img_h + 15) & ~0x0f; // round up to nearest multiple of 16
 
     image_input_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
-    image_output_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
-    runs = new thrust::device_vector<uint8_t>(img_w * img_h);
-    num_runs = new thrust::device_vector<uint16_t>((img_w * img_h) / 256);
-    sums = new thrust::device_vector<uint32_t>((img_w * img_h) / 256);
+    image_output_ptr = new thrust::device_vector<uint8_t>(out_width * out_height * 4);
+    runs = new thrust::device_vector<uint8_t>(out_width * out_height);
+    num_runs = new thrust::device_vector<uint16_t>((out_width * out_height) / 256);
+    sums = new thrust::device_vector<uint32_t>((out_width * out_height) / 256);
 }
 
-void getDxt1Dimensions(int *dxt1_width, int *dxt1_height)
+void getDxt1Dimensions(int *dxt1_width, int *dxt1_height, uint32_t *size)
 {
     *dxt1_width = (img_w + 3) & ~0x03; // round up to nearest multiple of 4
     *dxt1_height = (img_h + 3) & ~0x03; // round up to nearest multiple of 4
+    *size = (*dxt1_width) * (*dxt1_height) / 2;
 }
 
-void getTrleDimensions(int *trle_width, int *trle_height)
+void getTrleDimensions(int *trle_width, int *trle_height, uint32_t *max_size, uint32_t *offset_size)
 {
     *trle_width = (img_w + 15) & ~0x0f; // round up to nearest multiple of 16
     *trle_height = (img_h + 15) & ~0x0f; // round up to nearest multiple of 16
+    *max_size = (*trle_width) * (*trle_height) * 4;
+    *offset_size = (*trle_width) * (*trle_height) / 256;
 }
 
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
@@ -522,12 +555,12 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     const int trle_width = (img_w + 15) & ~0x0f; // round up to nearest multiple of 16
     const int trle_height = (img_h + 15) & ~0x0f; // round up to nearest multiple of 16
     const int k = 256; // pixels per tile
-    const int n = (img_w * img_h) / k; // number of tiles
+    const int n = (trle_width * trle_height) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
 
     // thrust for_each_n - one thread per pixel
-    thrust::for_each_n(thrust::device, it, img_w * img_h, TrleFunctor(img_w, img_h, *image_input_ptr, *runs));
+    thrust::for_each_n(thrust::device, it, trle_width * trle_height, TrleFunctor(img_w, img_h, *image_input_ptr, *runs));
 
     // thrust reduce_by_key - sum number of new runs per tile
     thrust::reduce_by_key(thrust::device, thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(0), thrust::placeholders::_1 / k), thrust::make_transform_iterator(thrust::counting_iterator<uint16_t>(n * k), thrust::placeholders::_1 / k), runs->begin(), thrust::discard_iterator<uint16_t>(), num_runs->begin());
