@@ -113,7 +113,7 @@ struct GrayscaleFunctor
             int px_x = thread_id % width;
             int px_y = thread_id / width;
             
-            uchar4 color = tex2D(image_texture, (float)px_x + 0.5f, (float)px_y + 0.5f);
+            uchar4 color = tex2D(image_texture, (float)px_x, (float)px_y);
             float red = (float)color.x;
             float green = (float)color.y;
             float blue = (float)color.z;
@@ -430,16 +430,13 @@ __device__ void extractTile4x4(int x, int y, int img_width, int img_height, uint
     uchar4 color;
     int rows = min(img_height - y, 4);
     int cols = min(img_width - x, 4);
-    
-    float tx = (float)x + 0.5f;
-    float ty = (float)y + 0.5f;
-    uchar4 first = tex2D(image_texture, tx, ty);
+    uchar4 first = tex2D(image_texture, (float)x, (float)y);
     
     for (i = 0; i < rows; i++)
     {
         for (j = 0; j < cols; j++)
         {
-            color = tex2D(image_texture, tx + (float)j, ty + (float)i);
+            color = tex2D(image_texture, (float)(x + j), (float)(i + y);
             memcpy(out_tile + ((i * 16) + (j * 4)), &color, 4);
         }
         for (j = cols; j < 4; j++)
