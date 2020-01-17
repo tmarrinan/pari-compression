@@ -1,13 +1,13 @@
 CXX= g++
-CXX_FLAGS= -std=c++11
+CXX_FLAGS= -std=c++11 -O2
 NVCC= nvcc
-NVCC_FLAGS= 
+NVCC_FLAGS= -O2 -pg -lineinfo
 
 # Program Name
 PROGRAM= cuda_opengl
 
 # Include and Library directories
-INC= -I/usr/local/cuda/include -I./include
+INC= -I/usr/local/cuda/include -I/usr/local/cuda/extras/CUPTI/include -I./include
 LIB= -L/usr/local/lib -L/usr/local/cuda/lib64 -lGL -lglfw -lglad -lcudart -ldl
 
 # File directory structure

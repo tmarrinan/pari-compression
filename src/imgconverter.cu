@@ -18,7 +18,7 @@ static thrust::device_vector<uint8_t> *image_output_ptr;
 static thrust::device_vector<uint16_t> *runs;
 static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
-
+static thrust::device_vector<uint32_t> *all_sums;
 
 __host__ __device__ void extractTile4x4(const uint8_t *pixels, int x, int y, int img_width, int img_height, uint8_t out_tile[64]);
 __host__ __device__ void extractTile16x16(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[1024]);
@@ -32,6 +32,60 @@ __host__ __device__ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t 
 
 uint64_t currentTime();
 
+
+// Source: https://stackoverflow.com/questions/42230488/how-make-a-stride-chunk-iterator-thrust-cuda
+template<typename Iterator> class strided_chunk_range
+{
+    public:
+        typedef typename thrust::iterator_difference<Iterator>::type difference_type;
+
+        struct stride_functor : public thrust::unary_function<difference_type,difference_type>
+        {
+            difference_type stride;
+            int chunk;
+            stride_functor(difference_type stride, int chunk)
+                : stride(stride), chunk(chunk) {}
+
+            __host__ __device__ difference_type operator()(const difference_type& i) const
+            {
+                int pos = i / chunk;
+                return ((pos * stride) + (i - (pos * chunk)));
+            }
+        };
+
+        typedef typename thrust::counting_iterator<difference_type> CountingIterator;
+        typedef typename thrust::transform_iterator<stride_functor, CountingIterator> TransformIterator;
+        typedef typename thrust::permutation_iterator<Iterator,TransformIterator> PermutationIterator;
+
+        // type of the strided_range iterator
+        typedef PermutationIterator iterator;
+
+        // construct strided_range for the range [first,last)
+        strided_chunk_range(Iterator first, Iterator last, difference_type stride, int chunk)
+            : first(first), last(last), stride(stride), chunk(chunk)
+        {
+            assert(chunk <= stride);
+        }
+
+        iterator begin(void) const
+        {
+            return PermutationIterator(first, TransformIterator(CountingIterator(0), stride_functor(stride, chunk)));
+        }
+
+        iterator end(void) const
+        {
+            int lmf = last - first;
+            int nfs = lmf / stride;
+            int rem = lmf - (nfs * stride);
+            return begin() + (nfs * chunk) + ((rem < chunk) ? rem : chunk);
+        }
+
+    protected:
+        Iterator first;
+        Iterator last;
+        difference_type stride;
+        int chunk;
+};
 
 struct GrayscaleFunctor
 {
@@ -237,9 +291,7 @@ struct FinalizeTrleFunctor
 
                 // trle indexed by block
 				trle[(sums[thread_id] * 4) + (i * 4)] = run_count;
-				trle[(sums[thread_id] * 4) + ((i * 4) + 1)] = rgba[offset + y_increase + x_increase];
-				trle[(sums[thread_id] * 4) + ((i * 4) + 2)] = rgba[offset + y_increase + x_increase + 1];
-				trle[(sums[thread_id] * 4) + ((i * 4) + 3)] = rgba[offset + y_increase + x_increase + 2];
+				memcpy(trle + ((sums[thread_id] * 4) + ((i * 4) + 1)), rgba + (offset + y_increase + x_increase), 3);
                 x_increase = (total_run_count % 16) * 4;
                 y_increase = (total_run_count / 16) * 4 * img_width;
             }
@@ -290,9 +342,6 @@ struct DecodeTrleFunctor
                 for (i = 0; i < run_length; i++)
                 {
                     memcpy(rgb + rgb_offset, trle + trle_offset + 1, 3);
-                    //rgb[rgb_offset] = trle[trle_offset + 1];
-                    //rgb[rgb_offset + 1] = trle[trle_offset + 2];
-                    //rgb[rgb_offset + 2] = trle[trle_offset + 3];
                     inner_count++;
 
                     if (inner_count % 16 == 0)
@@ -306,6 +355,59 @@ struct DecodeTrleFunctor
                 }
 
                 trle_offset += 4;
+            }
+        }
+    }
+};
+
+struct DecodeTrleFunctor2
+{
+    const uint8_t *trle;
+    const uint32_t *all_sums; // prefix sum array of run lengths
+    uint8_t *rgb;
+    int width;
+    int height;
+    size_t size;
+    DecodeTrleFunctor2(int width_in, int height_in, size_t run_count, thrust::device_vector<uint8_t> const& trle_in, thrust::device_vector<uint32_t> const& all_sums_in, thrust::device_vector<uint8_t>& rgb_out)
+    {
+        trle = thrust::raw_pointer_cast(trle_in.data());
+        all_sums = thrust::raw_pointer_cast(all_sums_in.data());
+        rgb = thrust::raw_pointer_cast(rgb_out.data());
+        width = width_in;
+        height = height_in;
+        size = run_count;
+    }
+    __host__  __device__ void operator()(int thread_id)
+    {
+        // px_ (x and y pixel indices)
+        // tile_ (x and y tile indices)
+        // inner_ (x and y indices within its tile)
+        if (thread_id < size)
+        {
+            int i;
+            int tile_idx = all_sums[thread_id] / 256;
+            int tile_x = tile_idx % (width / 16);
+            int tile_y = tile_idx / (width / 16);
+            int inner_idx = all_sums[thread_id] % 256;
+            int inner_x = inner_idx % 16;
+            int inner_y = inner_idx / 16;
+            int px_x = (tile_x * 16) + inner_x;
+            int px_y = (tile_y * 16) + inner_y;
+            uint32_t rgb_offset = (px_y * width * 3) + (px_x * 3);
+
+            uint16_t run_length = (uint16_t)trle[thread_id * 4] + 1;
+
+            for (i = 0; i < run_length; i++)
+            {
+                memcpy(rgb + rgb_offset, trle + (thread_id * 4) + 1, 3);
+                
+                px_x++;
+                if (px_x % 16 == 0)
+                {
+                    px_x -= 16;
+                    px_y++;
+                }
+                rgb_offset = (px_y * width * 3) + (px_x * 3);
             }
         }
     }
@@ -497,6 +599,7 @@ void initImageConverter(int width, int height)
     runs = new thrust::device_vector<uint16_t>(out_width * out_height);
     num_runs = new thrust::device_vector<uint16_t>((out_width * out_height) / 256);
     sums = new thrust::device_vector<uint32_t>((out_width * out_height) / 256);
+    all_sums = new thrust::device_vector<uint32_t>(out_width * out_height);
 }
 
 void getDxt1Dimensions(int *dxt1_width, int *dxt1_height, uint32_t *size)
@@ -521,14 +624,19 @@ void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
 
+    uint64_t start_compute = currentTime();
+
     // thrust for_each_n - one thread per pixel
     thrust::for_each_n(thrust::device, it, img_w * img_h, GrayscaleFunctor(*image_input_ptr, *image_output_ptr));
+    cudaDeviceSynchronize();
+
+    uint64_t end_compute = currentTime();
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (img_w * img_h), gray);
 
     uint64_t end = currentTime();
-    printf("THRUST - Grayscale (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
+    printf("THRUST - Grayscale (%dx%d):   %.6lf total, %.6lf compute\n", img_w, img_h, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
@@ -542,14 +650,19 @@ void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
 
+    uint64_t start_compute = currentTime();
+
     // thrust for_each_n - one thread per 4x4 tile
     thrust::for_each_n(thrust::device, it, n, Dxt1Functor(img_w, img_h, *image_input_ptr, *image_output_ptr));
+    cudaDeviceSynchronize();
+
+    uint64_t end_compute = currentTime();
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (dxt1_width * dxt1_height / 2), dxt1);
 
     uint64_t end = currentTime();
-    printf("THRUST - DXT1 (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
+    printf("THRUST - DXT1 (%dx%d):        %.6lf total, %.6lf compute\n", img_w, img_h, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *run_offsets)
@@ -562,6 +675,8 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     const int n = (trle_width * trle_height) / k; // number of tiles
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::counting_iterator<size_t> it(0);
+
+    uint64_t start_compute = currentTime();
 
     // thrust for_each_n - one thread per pixel
     thrust::for_each_n(thrust::device, it, trle_width * trle_height, TrleFunctor(img_w, img_h, *image_input_ptr, *runs));
@@ -585,6 +700,10 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     // thrust for_each_n - one thread per 16x16 tile
     thrust::for_each_n(thrust::device, it, n, FinalizeTrleFunctor(img_w, img_h, *image_input_ptr, *runs, *num_runs, *sums, *image_output_ptr));
 
+    cudaDeviceSynchronize();
+
+    uint64_t end_compute = currentTime();
+
     // copy offset data to host
     uint32_t last_size;
     thrust::copy(sums->begin(), sums->end(), run_offsets);
@@ -595,7 +714,7 @@ void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *r
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (*buffer_size), trle);
 
     uint64_t end = currentTime();
-    printf("THRUST - TRLE (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
+    printf("THRUST - TRLE (%dx%d):        %.6lf total, %.6lf compute\n", img_w, img_h, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 void trleToRgb(uint8_t *trle, uint8_t *rgb, uint32_t buffer_size, uint32_t *run_offsets)
@@ -610,14 +729,32 @@ void trleToRgb(uint8_t *trle, uint8_t *rgb, uint32_t buffer_size, uint32_t *run_
     thrust::copy(run_offsets, run_offsets + n, sums->begin());
     thrust::counting_iterator<size_t> it(0);
 
+    uint64_t start_compute = currentTime();
+
     // thrust for_each_n - one thread per 16x16 tile
-    thrust::for_each_n(thrust::device, it, n, DecodeTrleFunctor(trle_width, trle_height, *image_input_ptr, *sums, *image_output_ptr));
+    //thrust::for_each_n(thrust::device, it, n, DecodeTrleFunctor(trle_width, trle_height, *image_input_ptr, *sums, *image_output_ptr));
+    
+    // extract just the run length from each run (skip rgb color)
+    strided_chunk_range<thrust::device_vector<uint8_t>::iterator> all_offsets(image_input_ptr->begin(), image_input_ptr->begin() + buffer_size, 4, 1);
+    
+    // thrust exclusive_scan (prefix sum) - create array for all run offsets
+    size_t run_count = all_offsets.end() - all_offsets.begin();
+    thrust::exclusive_scan(thrust::device, all_offsets.begin(), all_offsets.end(), all_sums->begin());
+    
+    // add index to each value (run length count subtracts 1 so range is 0-255 rather than 1-256)
+    thrust::transform(thrust::device, all_sums->begin(), all_sums->begin() + run_count, it, all_sums->begin(), thrust::plus<uint32_t>());
+   
+    // thrust for_each_n - one thread per run
+    thrust::for_each_n(thrust::device, it, run_count, DecodeTrleFunctor2(trle_width, trle_height, run_count, *image_input_ptr, *all_sums, *image_output_ptr));
+    cudaDeviceSynchronize();
+
+    uint64_t end_compute = currentTime();
 
     // copy image data back to host
     thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (trle_width * trle_height * 3), rgb);
 
     uint64_t end = currentTime();
-    printf("THRUST - Decode TRLE (%dx%d): %.6lf\n", trle_width, trle_height, (double)(end - start) / 1000000.0);
+    printf("THRUST - Decode TRLE (%dx%d): %.6lf total, %.6lf compute\n", trle_width, trle_height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 void finalizeImageConverter()

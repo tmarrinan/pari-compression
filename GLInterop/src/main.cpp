@@ -2,7 +2,7 @@
 #include <glad/glad.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#include "readpx.h" 
+#include "imgread.h" 
 
 typedef struct DdsPixelFormat {
     uint32_t dw_size;
@@ -69,29 +69,41 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    // Read image and upload as OpenGL texture
+    // Read image from file
     uint32_t img_w, img_h;
     uint8_t *rgba_in;
+    //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba_in);
+    ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba_in); 
+    printf("Image size: %ux%u\n", img_w, img_h);
+
+    // Upload image as OpenGL texture
     GLuint texture;
-    ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba_in);
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_in);
     glBindTexture(GL_TEXTURE_2D, 0);
 
+    // initialize image converter
+    initImageConverter(img_w, img_h, texture);
+    
     // Allocate output image buffers
+    int dxt1_w, dxt1_h;
+    uint32_t dxt1_size;
+    getDxt1Dimensions(&dxt1_w, &dxt1_h, &dxt1_size);
     uint8_t *rgb_out = new uint8_t[img_w * img_h * 3];
     uint8_t *rgba_out = new uint8_t[img_w * img_h * 4];
     uint8_t *gray_out = new uint8_t[img_w * img_h];
-    uint8_t *dxt1_out = new uint8_t[img_w * img_h / 2];
-    uint8_t *gpu_gray, *gpu_dxt1;
-    AllocateGpuOutput((void**)&gpu_gray, img_w * img_h);
-    AllocateGpuOutput((void**)&gpu_dxt1, img_w * img_h / 2);
+    uint8_t *dxt1_out = new uint8_t[dxt1_size];
 
+    // Convert on GPU then copy to CPU
+    rgbaToGrayscale(NULL, gray_out);
+    rgbaToDxt1(NULL, dxt1_out);
+
+    /*
     // Convert on GPU then copy to CPU
     struct cudaGraphicsResource *resource;
     BindCudaResourceToTexture(&resource, texture);
@@ -99,9 +111,10 @@ int main(int argc, char **argv)
     ReadRgbaTextureAsRgba(texture, rgba_out);
     ReadRgbaTextureAsGrayscale(&resource, texture, img_w, img_h, gpu_gray, gray_out);
     ReadRgbaTextureAsDxt1(&resource, texture, img_w, img_h, gpu_dxt1, dxt1_out);
+    */
 
     // Write output images to disk
-    SavePpm("out_rgb.ppm", img_w, img_h, rgb_out);
+    //SavePpm("out_rgb.ppm", img_w, img_h, rgb_out);
     SavePgm("out_gray.pgm", img_w, img_h, gray_out);
     SaveDds("out_dxt1.dds", img_w, img_h, dxt1_out);
 
@@ -141,6 +154,10 @@ void CreateDdsHeader(int width, int height, DdsHeader *header)
 void ReadPpm(const char *filename, uint32_t *width, uint32_t *height, uint8_t **pixels)
 {
     FILE *fp = fopen(filename, "rb");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "Error: could not read %s\n", filename);
+    }
     int header_count = 0;
     ssize_t read;
     char *line = NULL;
@@ -168,6 +185,7 @@ void ReadPpm(const char *filename, uint32_t *width, uint32_t *height, uint8_t **
         (*pixels)[4 * i + 2] = tmp[3 * i + 2];
         (*pixels)[4 * i + 3] = 255;
     }
+    delete[] tmp;
 }
 
 void SavePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels)

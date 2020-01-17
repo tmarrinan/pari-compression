@@ -43,9 +43,9 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    //ReadPpm("resrc/rletest_52x24.ppm", &img_w, &img_h, &rgba);
-    ReadPpm("resrc/md_section_257x257.ppm", &img_w, &img_h, &rgba);
-    //ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/rletest_64x32.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/md_section_257x257.ppm", &img_w, &img_h, &rgba);
+    ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
    
@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     
     // convert rgba image to trle image
     rgbaToTrle(rgba, trle, &size, trle_offsets);
-    printf("Total TRLE size: %u, number of runs: %u, compression ratio: %.3lf:1\n", size + trle_offsetsize, size / 4, (double)(img_w * img_h * 4) / (double)(size + trle_offsetsize));
+    printf("Total TRLE size: %u, number of runs: %u, compression ratio: %.3lf:1\n", size + (trle_offsetsize * 4), size / 4, (double)(img_w * img_h * 4) / (double)(size + (trle_offsetsize * 4)));
     //for (int i = 0; i < size; i+=4)
     //{
     //    printf("TRLE run: length=%u, rgb=(%u,%u,%u)\n", (uint16_t)trle[i] + 1, trle[i + 1], trle[i + 2], trle[i + 3]);
@@ -146,6 +146,7 @@ void ReadPpm(const char *filename, int *width, int *height, uint8_t **pixels)
         (*pixels)[4 * i + 2] = tmp[3 * i + 2];
         (*pixels)[4 * i + 3] = 255;
     }
+    delete[] tmp;
 }
 
 void SavePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels)
