@@ -73,7 +73,7 @@ int main(int argc, char **argv)
     uint32_t img_w, img_h;
     uint8_t *rgba_in;
     GLuint texture;
-    ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba_in);
+    ReadPpm("resrc/md_region_1080.ppm", &img_w, &img_h, &rgba_in);
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);

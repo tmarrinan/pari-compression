@@ -43,8 +43,8 @@ int main(int argc, char **argv)
     int img_w;
     int img_h;
     uint8_t *rgba;
-    ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
-    //ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
+    ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
     
     // allocate output images
@@ -127,7 +127,7 @@ void ReadPpm(const char *filename, int *width, int *height, uint8_t **pixels)
     }
     uint8_t *tmp = new uint8_t[(*width) * (*height) * 3];
     *pixels = new uint8_t[(*width) * (*height) * 4];
-    fread(tmp, (*width) * (*height) * 3, 1, fp);
+    size_t size = fread(tmp, (*width) * (*height) * 3, 1, fp);
     int i;
     for (i = 0; i < (*width) * (*height); i++)
     {
