@@ -1,2 +1,2 @@
-# CUDA Image Compression
-Real-time image compression using CUDA
+# PARallel Image (PARI) Compression
+Real-time parallel image compression using CUDA, OpenMP, ...
