@@ -366,7 +366,6 @@ uint32_t colorIndices(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[
     colors[14] = (colors[2] + 2 * colors[6]) / 3;
     
     uint32_t dist, min_dist;
-    //#pragma omp parallel for
     for (i = 0; i < 16; i++)
     {
         min_dist = 195076;  // 255 * 255 * 3 + 1
@@ -417,8 +416,8 @@ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value)
 
 uint64_t currentTime()
 {
-    std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
-    return ms.count();
+    std::chrono::microseconds us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch());
+    return us.count();
 
     //struct timespec ts;
     //timespec_get(&ts, TIME_UTC);
@@ -438,60 +437,89 @@ void initImageConverter(int width, int height)
     runs = new uint8_t[img_w * img_h];
     num_runs = new uint16_t[(img_w * img_h) / 256];
     sums = new uint32_t[(img_w * img_h) / 256];
+
+    int target[1];
+    target[0] = omp_get_initial_device();
+    std::cout << "Total Devices: " << omp_get_num_devices() << std::endl;
+    std::cout << "Target: " << target[0] << std::endl;
 }
 
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
 {
-    uint64_t start = currentTime();
+    double start = omp_get_wtime();
 
     int i;
     const int size = img_w * img_h;
+    const int n_rgba = img_w * img_h * 4;
+    const int n_gray = img_w * img_h;
 
-    #pragma omp parallel for
-    for (i = 0; i < size; i++)
+    double start_compute, end_compute;
+    //#pragma omp target data map(to: rgba[0:n_rgba]) map(from: gray[0:n_gray]) device(0)
     {
-        float red = (float)rgba[4 * i + 0];
-        float green = (float)rgba[4 * i + 1];
-        float blue = (float)rgba[4 * i + 2];
-        gray[i] = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
+        start_compute = omp_get_wtime();
+
+        //#pragma omp target map(to: rgba[0:n_rgba]) map(from: gray[0:n_gray]) device(0)
+        //#pragma omp teams distribute parallel for private(i)
+        #pragma omp parallel for private(i)
+        for (i = 0; i < size; i++)
+        {
+            float red = (float)rgba[4 * i + 0];
+            float green = (float)rgba[4 * i + 1];
+            float blue = (float)rgba[4 * i + 2];
+            gray[i] = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
+        }
+
+        end_compute = omp_get_wtime();
     }
 
-    uint64_t end = currentTime();
-    printf("OpenMP - Grayscale (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
+    double end = omp_get_wtime();
+    printf("OpenMP - Grayscale (%dx%d): %.6lf total, %.6lf compute\n", img_w, img_h, end - start, end_compute - start_compute);
 }
 
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
-    uint64_t start = currentTime();
+    double start = omp_get_wtime();
 
     int i;
     const int k = 16; // pixels per tile
     const int size = (img_w * img_h) / k; // number of tiles
+    const int n_rgba = img_w * img_h * 4;
+    const int n_dxt1 = img_w * img_h / 2;
 
-    #pragma omp parallel for
-    for (i = 0; i < size; i++)
+    double start_compute, end_compute;
+    #pragma omp target data map(to: rgba[0:n_rgba]) map(from: dxt1[0:n_dxt1]) device(0)
     {
-        uint8_t tile[64];
-        uint8_t color_min[3];
-        uint8_t color_max[3];
+        start_compute = omp_get_wtime();
 
-        int tile_x = i % (img_w / 4);
-        int tile_y = i / (img_w / 4);
-        int px_x = tile_x * 4;
-        int px_y = tile_y * 4;
+        #pragma omp target map(to: rgba[0:n_rgba]) map(from: dxt1[0:n_dxt1]) device(0)
+        #pragma omp teams distribute parallel for private(i)
+        //#pragma omp parallel for private(i)
+        for (i = 0; i < size; i++)
+        {
+            uint8_t tile[64];
+            uint8_t color_min[3];
+            uint8_t color_max[3];
 
-        uint32_t offset = (px_y * img_w * 4) + (px_x * 4);
-        uint32_t write_pos = (tile_y * (img_w / 4) * 8) + (tile_x * 8);
+            int tile_x = i % (img_w / 4);
+            int tile_y = i / (img_w / 4);
+            int px_x = tile_x * 4;
+            int px_y = tile_y * 4;
 
-        extractTile4x4(offset, rgba, img_w, tile);
-        getMinMaxColors(tile, color_min, color_max);
-        writeUint16(dxt1, write_pos, colorTo565(color_max));
-        writeUint16(dxt1, write_pos + 2, colorTo565(color_min));
-        writeUint32(dxt1, write_pos + 4, colorIndices(tile, color_min, color_max));
+            uint32_t offset = (px_y * img_w * 4) + (px_x * 4);
+            uint32_t write_pos = (tile_y * (img_w / 4) * 8) + (tile_x * 8);
+
+            extractTile4x4(offset, rgba, img_w, tile);
+            getMinMaxColors(tile, color_min, color_max);
+            writeUint16(dxt1, write_pos, colorTo565(color_max));
+            writeUint16(dxt1, write_pos + 2, colorTo565(color_min));
+            writeUint32(dxt1, write_pos + 4, colorIndices(tile, color_min, color_max));
+        }
+
+        end_compute = omp_get_wtime();
     }
 
-    uint64_t end = currentTime();
-    printf("OpenMP - DXT1 (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
+    double end = omp_get_wtime();
+    printf("OpenMP - DXT1 (%dx%d): %.6lf total, %.6lf compute\n", img_w, img_h, end - start, end_compute - start_compute);
 }
 
 void rgbaToTrle(uint8_t *rgba, uint8_t *trle, uint32_t *buffer_size, uint32_t *run_offsets)

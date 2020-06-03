@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cmath>
 #include <chrono>
+#include <omp.h>
 
 void initImageConverter(int width, int height);
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray);
