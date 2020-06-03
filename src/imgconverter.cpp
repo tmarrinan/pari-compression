@@ -432,6 +432,7 @@ void initImageConverter(int width, int height)
     img_w = width;
     img_h = height;
 
+    // maybe don't need to allocate?
     image_input_ptr = new uint8_t[img_w * img_h * 4];
     image_output_ptr = new uint8_t[img_w * img_h * 4];
     runs = new uint8_t[img_w * img_h];
@@ -442,6 +443,9 @@ void initImageConverter(int width, int height)
     target[0] = omp_get_initial_device();
     std::cout << "Total Devices: " << omp_get_num_devices() << std::endl;
     std::cout << "Target: " << target[0] << std::endl;
+
+    #pragma omp target enter data map(alloc:image_input_ptr[0:img_w * img_h * 4]) device(0)
+    #pragma omp target enter data map(alloc:image_output_ptr[0:img_w * img_h * 4]) device(0)
 }
 
 void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
@@ -453,31 +457,36 @@ void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
     const int n_rgba = img_w * img_h * 4;
     const int n_gray = img_w * img_h;
 
+    // TODO: edit this
+    memcpy(image_input_ptr, rgba, img_w * img_h * 4);
+
     double start_compute, end_compute;
-    //#pragma omp target data map(to: rgba[0:n_rgba]) map(from: gray[0:n_gray]) device(0)
+    #pragma omp target update to(image_input_ptr[0:n_rgba]) device(0)
+    start_compute = omp_get_wtime();
+
+    #pragma omp target teams distribute parallel for private(i) device(0)
+    for (i = 0; i < size; i++)
     {
-        start_compute = omp_get_wtime();
-
-        //#pragma omp target map(to: rgba[0:n_rgba]) map(from: gray[0:n_gray]) device(0)
-        //#pragma omp teams distribute parallel for private(i)
-        #pragma omp parallel for private(i)
-        for (i = 0; i < size; i++)
-        {
-            float red = (float)rgba[4 * i + 0];
-            float green = (float)rgba[4 * i + 1];
-            float blue = (float)rgba[4 * i + 2];
-            gray[i] = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
-        }
-
-        end_compute = omp_get_wtime();
+        float red = (float)image_input_ptr[4 * i + 0];
+        float green = (float)image_input_ptr[4 * i + 1];
+        float blue = (float)image_input_ptr[4 * i + 2];
+        image_output_ptr[i] = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
     }
 
+    end_compute = omp_get_wtime();
+    #pragma omp target update from(image_output_ptr[0:n_gray]) device(0)
+
     double end = omp_get_wtime();
+
+    // TODO: edit this
+    memcpy(gray, image_output_ptr, img_w * img_h);
+
     printf("OpenMP - Grayscale (%dx%d): %.6lf total, %.6lf compute\n", img_w, img_h, end - start, end_compute - start_compute);
 }
 
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
+    std::cout << "Enter RGBA to DXT1" << std::endl;
     double start = omp_get_wtime();
 
     int i;
@@ -486,39 +495,44 @@ void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
     const int n_rgba = img_w * img_h * 4;
     const int n_dxt1 = img_w * img_h / 2;
 
+    // TODO: edit this
+    memcpy(image_input_ptr, rgba, img_w * img_h * 4);
+
     double start_compute, end_compute;
-    #pragma omp target data map(to: rgba[0:n_rgba]) map(from: dxt1[0:n_dxt1]) device(0)
+
+    #pragma omp target update to(image_input_ptr[0:n_rgba]) device(0)
+    start_compute = omp_get_wtime();
+
+    #pragma omp target teams distribute parallel for private(i) device(0)
+    for (i = 0; i < size; i++)
     {
-        start_compute = omp_get_wtime();
+        uint8_t tile[64];
+        uint8_t color_min[3];
+        uint8_t color_max[3];
 
-        #pragma omp target map(to: rgba[0:n_rgba]) map(from: dxt1[0:n_dxt1]) device(0)
-        #pragma omp teams distribute parallel for private(i)
-        //#pragma omp parallel for private(i)
-        for (i = 0; i < size; i++)
-        {
-            uint8_t tile[64];
-            uint8_t color_min[3];
-            uint8_t color_max[3];
+        int tile_x = i % (img_w / 4);
+        int tile_y = i / (img_w / 4);
+        int px_x = tile_x * 4;
+        int px_y = tile_y * 4;
 
-            int tile_x = i % (img_w / 4);
-            int tile_y = i / (img_w / 4);
-            int px_x = tile_x * 4;
-            int px_y = tile_y * 4;
+        uint32_t offset = (px_y * img_w * 4) + (px_x * 4);
+        uint32_t write_pos = (tile_y * (img_w / 4) * 8) + (tile_x * 8);
 
-            uint32_t offset = (px_y * img_w * 4) + (px_x * 4);
-            uint32_t write_pos = (tile_y * (img_w / 4) * 8) + (tile_x * 8);
-
-            extractTile4x4(offset, rgba, img_w, tile);
-            getMinMaxColors(tile, color_min, color_max);
-            writeUint16(dxt1, write_pos, colorTo565(color_max));
-            writeUint16(dxt1, write_pos + 2, colorTo565(color_min));
-            writeUint32(dxt1, write_pos + 4, colorIndices(tile, color_min, color_max));
-        }
-
-        end_compute = omp_get_wtime();
+        extractTile4x4(offset, image_input_ptr, img_w, tile);
+        getMinMaxColors(tile, color_min, color_max);
+        writeUint16(image_output_ptr, write_pos, colorTo565(color_max));
+        writeUint16(image_output_ptr, write_pos + 2, colorTo565(color_min));
+        writeUint32(image_output_ptr, write_pos + 4, colorIndices(tile, color_min, color_max));
     }
 
+    end_compute = omp_get_wtime();
+    #pragma omp target update from(image_output_ptr[0:n_dxt1]) device(0)
+
     double end = omp_get_wtime();
+    
+    // TODO: edit this
+    memcpy(dxt1, image_output_ptr, img_w * img_h / 2);
+    
     printf("OpenMP - DXT1 (%dx%d): %.6lf total, %.6lf compute\n", img_w, img_h, end - start, end_compute - start_compute);
 }
 
@@ -584,5 +598,7 @@ void trleToRgb(uint8_t *trle, uint8_t *rgb, uint32_t buffer_size, uint32_t *run_
 void finalizeImageConverter()
 {
     //cudaDeviceSynchronize();
+    #pragma omp target exit data map(release:image_input_ptr[0:img_w * img_h * 4]) device(0)
+    #pragma omp target exit data map(release:image_output_ptr[0:img_w * img_h * 4]) device(0)
 }
 

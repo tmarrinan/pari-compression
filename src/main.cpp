@@ -60,13 +60,26 @@ int main(int argc, char **argv)
     initImageConverter(img_w, img_h);
     
     // convert rgba image to grayscale image
-    //rgbaToGrayscale(rgba, gray);
-    //SavePgm("openmp_result_gray.pgm", img_w, img_h, gray);
+    rgbaToGrayscale(rgba, gray);
+    SavePgm("openmp_result_gray.pgm", img_w, img_h, gray);
     
     // convert rgba image to dxt1 image
+    rgba[0] = 255;
     rgbaToDxt1(rgba, dxt1);
     SaveDds("openmp_result_dxt1.dds", img_w, img_h, dxt1);
     
+    rgba[0] = 245;
+    rgbaToDxt1(rgba, dxt1);
+    SaveDds("openmp_result_dxt1.dds", img_w, img_h, dxt1);
+    
+    rgba[0] = 235;
+    rgbaToDxt1(rgba, dxt1);
+    SaveDds("openmp_result_dxt1.dds", img_w, img_h, dxt1);
+    
+    rgbaToDxt1(rgba, dxt1);
+    rgbaToDxt1(rgba, dxt1);
+    rgbaToDxt1(rgba, dxt1);
+    SaveDds("openmp_result_dxt1.dds", img_w, img_h, dxt1);
     
     //convert rgba image to trle image
     //rgbaToTrle(rgba, trle, &size, trle_offsets);
