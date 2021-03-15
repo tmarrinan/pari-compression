@@ -42,9 +42,59 @@ int main(int argc, char **argv)
     // read rgba image (ppm file)
     int img_w;
     int img_h;
-    uint8_t *rgba;
+    //uint8_t *rgba;
+    //float *depth;
+
+    img_w = 8;
+    img_h = 3;
+    //set manually for rgba array. 8 * 3 * 4 (or smaller)
+    //rgba = new uint8_t[8*3*4];
+    uint8_t rgba[96] = {
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255
+    };
+
+
+    //depth float array
+    //depth = new float[8*3];
+    float depth[24] = {
+        1.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+    };
+
+
+    /*
+    
+    3, 3, 3, 1, 1, 4, 9, 0, 0, 0..
+
+    all odd indexed values (3, 1, 4, 0) ACTIVE PIXEL RUNS
+
+    exclusive prefix sum (0, 3, 4, 8) for each run, how many active pixels have been stored before it
+
+    offset given run: prefix sum for that run * 8 + (8 * (run_index + 1))
+
+    first run offset is 8 (0 * 8 + (8 * (0 + 1))) FROM START OF FINAL GOAL ARRAY
+
+    second run: 3 * 8 + (8 * (1 + 1)) = 40
+
+    third run: 4 * 8 + (8 * (2 + 1)) = 56
+
+    exclusive prefix sum of line 68: (0, 3, 6, 9, 10, 11, 15, 24, 24 ,24....)
+
+    add 0 at the beginning if it starts with active pixel.
+
+    last number in runs_groups is the count of groups. If depth of last thing is a 1, add 1 to the count, so you include the last zero.
+
+    put into rgbaDepthToActivePixel (imgconverter.cu)
+
+    Final goal:
+    3, 3, 255, 255, 255, 255, -1.0, 255, 255, 255, 255, 0.0, 255, 255, 255, 255, 0.5, 3, 1, 255, 255, 255, 255, -1.0, 1, 4, 255, 255, 255, 255, 0.0, 255, 255, 255, 255, 0.9, 255, 255, 255, 255, -1.0, 255, 255, 255, 255, -0.5, 9, 0
+
+    */
+
+
     //ReadPpm("resrc/md_section_2048x1152.ppm", &img_w, &img_h, &rgba);
-    ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
+    //ReadPpm("resrc/rletest_256x128.ppm", &img_w, &img_h, &rgba);
     //ReadPpm("resrc/UST_test.ppm", &img_w, &img_h, &rgba);
     
     // allocate output images
@@ -52,6 +102,7 @@ int main(int argc, char **argv)
     uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
     uint8_t *trle = new uint8_t[img_w * img_h];
     uint8_t *rgb_copy = new uint8_t[img_w*img_h*3];
+    uint8_t* active_pixels = new uint8_t[img_w * img_h * 8 + 8];
     uint32_t *trle_offsets = new uint32_t[img_w * img_h / 256];
     // buffer size for variable sized outputs
     uint32_t size;
@@ -59,7 +110,11 @@ int main(int argc, char **argv)
     // initialize image converter
     initImageConverter(img_w, img_h);
     
+    //put my test case here, comment out the rest of the test cases.
+    rgbaDepthToActivePixel(rgba, depth, active_pixels);
     // convert rgba image to grayscale image
+
+    /*
     rgbaToGrayscale(rgba, gray);
     SavePgm("cuda_result_gray.pgm", img_w, img_h, gray);
     
@@ -76,6 +131,7 @@ int main(int argc, char **argv)
     SavePpm("cuda_result_rgb.ppm", img_w, img_h, rgb_copy);
 
     // clean up
+    */
     finalizeImageConverter();
     
     return 0;

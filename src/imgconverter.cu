@@ -14,10 +14,13 @@
 static int img_w;
 static int img_h;
 static thrust::device_vector<uint8_t> *image_input_ptr;
+static thrust::device_vector<float> *depth_input_ptr;
 static thrust::device_vector<uint8_t> *image_output_ptr;
 static thrust::device_vector<uint8_t> *runs;
 static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
+static thrust::device_vector<uint32_t> *run_groups;
+static thrust::device_vector<uint32_t>* run_counts;
 
 
 __host__ __device__ void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64]);
@@ -31,6 +34,46 @@ __host__ __device__ void writeUint16(uint8_t *buffer, uint32_t offset, uint16_t 
 __host__ __device__ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
 
 uint64_t currentTime();
+
+struct ActivePixelIceTFunctor
+
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint8_t* active;
+    int width;
+    int height;
+    float max_depth;
+
+    ActivePixelIceTFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<float> const& depth_input, thrust::device_vector<uint8_t>& active_output)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        active = thrust::raw_pointer_cast(active_output.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+
+    __host__ __device__ void operator()(int thread_id)
+    {
+
+        if (thread_id < width * height)
+        {
+            // start of new pixel run
+            if (thread_id == 0 || (depth[thread_id] != max_depth && depth[thread_id - 1] == max_depth) || (depth[thread_id] == max_depth && depth[thread_id - 1] != max_depth))
+            {
+                active[thread_id] = 1;
+            }
+
+            // continuing current run
+            else
+            {
+                active[thread_id] = 0;
+            }
+        }
+    }
+};
 
 
 struct GrayscaleFunctor
@@ -284,7 +327,6 @@ struct DecodeTrleFunctor
     }
 };
 
-
 void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64])
 {
     int i, j;
@@ -440,8 +482,11 @@ void initImageConverter(int width, int height)
     img_h = height;
 
     image_input_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
+    depth_input_ptr = new thrust::device_vector<float>(img_w * img_h);
     image_output_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
     runs = new thrust::device_vector<uint8_t>(img_w * img_h);
+    run_groups = new thrust::device_vector<uint32_t>(img_w * img_h);
+    run_counts = new thrust::device_vector<uint32_t>(img_w * img_h);
     num_runs = new thrust::device_vector<uint16_t>((img_w * img_h) / 256);
     sums = new thrust::device_vector<uint32_t>((img_w * img_h) / 256);
 }
@@ -462,6 +507,26 @@ void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
     uint64_t end = currentTime();
     printf("THRUST - Grayscale (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
+
+void rgbaDepthToActivePixel(uint8_t* rgba, float* depth, uint8_t* active_pixel)
+{
+    thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
+    thrust::copy(depth, depth + (img_w * img_h), depth_input_ptr->begin());
+
+    // thrust for_each_n - one thread per pixel
+    thrust::counting_iterator<size_t> it(0);
+    thrust::for_each_n(thrust::device, it, img_w * img_h, ActivePixelIceTFunctor(img_w, img_h, *image_input_ptr, *depth_input_ptr, *runs));
+
+    thrust::copy(runs->begin(), runs->end(), std::ostream_iterator<int>(std::cout, ", "));
+    printf("\n");
+    thrust::inclusive_scan(thrust::device, runs->begin(), runs->end(), run_groups->begin());
+    thrust::copy(run_groups->begin(), run_groups->end(), std::ostream_iterator<int>(std::cout, ", "));
+    printf("\n");
+    thrust::reduce_by_key(thrust::device, run_groups->begin(), run_groups->end(), thrust::make_constant_iterator(1), thrust::discard_iterator<uint32_t>(), run_counts->begin());
+    thrust::copy(run_counts->begin(), run_counts->end(), std::ostream_iterator<int>(std::cout, ", "));
+    printf("\n");
+}
+
 
 void rgbaToDxt1(uint8_t *rgba, uint8_t *dxt1)
 {
