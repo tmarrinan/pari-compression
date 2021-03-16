@@ -1,3 +1,194 @@
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <GL/gl.h>
+#include <cuda_runtime_api.h>
+#include <cuda_gl_interop.h>
+#include <thrust/execution_policy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+#include <thrust/iterator/counting_iterator.h>
+#include "paricompress.h"
+
+static uint64_t currentTime();
+
+
+// CUDA Thrust functors
+struct PariGrayscaleFunctor
+{
+    const uint8_t *rgba;
+    uint8_t *gray;
+    size_t size;       
+    PariGrayscaleFunctor(thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<uint8_t>& gray_output)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        gray = thrust::raw_pointer_cast(gray_output.data());
+        size = rgba_input.size() / 4;
+    } 
+    __host__ __device__	void operator()(int thread_id)
+    {
+        if (thread_id < size)
+        {
+            float red = (float)rgba[4 * thread_id + 0];
+            float green = (float)rgba[4 * thread_id + 1];
+            float blue = (float)rgba[4 * thread_id + 2];
+            gray[thread_id] = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
+        }
+    }
+};
+
+struct PariCGGrayscaleFunctor
+{
+    cudaSurfaceObject_t rgba;
+    uint8_t *gray;
+    uint32_t width;
+    uint32_t height;
+    PariCGGrayscaleFunctor(cudaSurfaceObject_t const& rgba_input, thrust::device_vector<uint8_t>& gray_output,
+                     uint32_t width_input, uint32_t height_input)
+    {
+        rgba = rgba_input;
+        gray = thrust::raw_pointer_cast(gray_output.data());
+        width = width_input;
+        height = height_input;
+    } 
+    __device__	void operator()(int thread_id)
+    {
+        if (thread_id < (width * height))
+        {  
+            uchar4 color;
+            surf2Dread(&color, rgba, 4 * (thread_id % width), thread_id / width);
+            gray[thread_id] = (uint8_t)(0.299f * color.x + 0.587f * color.y + 0.114f * color.z);
+        }
+    }
+};
+
+
+// Standard PARI functions
+PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariCompressionType type)
+{
+    PariGpuBuffer buffers;
+    switch (type)
+    {
+        case PariCompressionType::Grayscale:
+            buffers = (PariGpuBuffer)malloc(sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));
+            break;
+        case PariCompressionType::Rgb:
+            buffers = (PariGpuBuffer)malloc(sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 3));
+            break;
+        case PariCompressionType::Rgba:
+            buffers = (PariGpuBuffer)malloc(sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 4));
+            break;
+        case PariCompressionType::Dxt1:
+            if (width % 4 != 0 || height % 4 != 0)
+            {
+                buffers = NULL;
+            }
+            else
+            {
+                buffers = (PariGpuBuffer)malloc(sizeof(void*));
+                buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height / 2));
+            }
+            break;
+        case PariCompressionType::ActivePixel:
+            buffers = (PariGpuBuffer)malloc(6 * sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel starts a new run (0 or 1)
+            buffers[1] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // id for each run (inclusive scan of buffers[0])
+            buffers[2] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // number of pixels in each run (reduce_by_key of buffers[1])
+            buffers[3] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // offset in original image where each run starts (exclusive scan of buffers[2])
+            buffers[4] = (void*)(new thrust::device_vector<uint32_t>(width * height / 2));    // offset in compressed image where each run starts (exclusive scan of odd indices in buffers[2])
+            buffers[5] = (void*)(new thrust::device_vector<uint8_t>(width * height * 8 + 8)); // final compressed image
+            break;
+        default:
+            buffers = NULL;
+            break;
+    }
+    return buffers;
+}
+
+PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
+                                              PariGpuBuffer gpu_out_buf, uint8_t *gray)
+{
+    uint64_t start = currentTime();
+
+    // Get handles to input and output image pointers
+    thrust::device_vector<uint8_t> *input_ptr = (thrust::device_vector<uint8_t>*)(gpu_in_buf[0]);
+    thrust::device_vector<uint8_t> *output_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[0]);
+
+    // Upload RGBA buffer to GPU
+    thrust::copy(rgba, rgba + (width * height * 4), input_ptr->begin());
+
+    // Convert RGBA buffer to Grayscale buffer
+    thrust::counting_iterator<size_t> it(0);
+    thrust::for_each_n(thrust::device, it, width * height, PariGrayscaleFunctor(*input_ptr, *output_ptr));
+
+    // Copy image data back to host
+    thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height), gray);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariRgbaBufferToGrayscale (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+}
+
+// OpenGL - PARI functions
+PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResourceDescription *resrc_description_ptr)
+{
+    struct cudaGraphicsResource *cuda_resource;
+    struct cudaResourceDesc **description_ptr = (struct cudaResourceDesc **)resrc_description_ptr;
+    
+    cudaGraphicsGLRegisterImage(&cuda_resource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsReadOnly);
+    
+    *description_ptr = new struct cudaResourceDesc();
+    memset(*description_ptr, 0, sizeof(struct cudaResourceDesc));
+    (*description_ptr)->resType = cudaResourceTypeArray;
+    
+    return (PariCGResource)cuda_resource;
+}
+
+PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
+                                                  PariGpuBuffer gpu_out_buf, uint32_t texture, uint32_t width, uint32_t height, 
+                                                  uint8_t *gray)
+{
+    cudaArray *array;
+    cudaSurfaceObject_t target;
+
+    // Get handles to output image pointer as well as cuda resource and its description
+    thrust::device_vector<uint8_t> *output_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[0]);
+    struct cudaGraphicsResource *cuda_resource = (struct cudaGraphicsResource *)cg_resource;
+    struct cudaResourceDesc description = *(struct cudaResourceDesc *)resrc_description;
+
+    // Enable CUDA to access OpenGL texture
+    glBindTexture(GL_TEXTURE_2D, texture);
+    cudaGraphicsMapResources(1, &cuda_resource, 0);
+    cudaGraphicsSubResourceGetMappedArray(&array, cuda_resource, 0, 0);
+    description.res.array.array = array;
+    cudaCreateSurfaceObject(&target, &description);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    // Convert RGBA texture to Grayscale buffer
+    thrust::counting_iterator<size_t> it(0);
+    thrust::for_each_n(thrust::device, it, width * height, PariCGGrayscaleFunctor(target, *output_ptr, width, height));
+
+    // Copy image data back to host
+    thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height), gray);
+
+    // release texture for use by OpenGL again
+    cudaGraphicsUnmapResources(1, &cuda_resource, 0);
+}
+
+
+// Internal functions
+static uint64_t currentTime()
+{
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (ts.tv_sec * 1000000ull) + (ts.tv_nsec / 1000ull);
+}
+
+
+
+/*
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
@@ -541,4 +732,4 @@ void finalizeImageConverter()
 {
     cudaDeviceSynchronize();
 }
-
+*/
