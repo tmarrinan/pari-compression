@@ -1,45 +1,72 @@
+# Check for OS (Windows, Linux, Mac OS)
+ifeq ($(OS),Windows_NT)
+	DETECTED_OS:= Windows
+else
+	DETECTED_OS:= $(shell uname)
+endif
+
+# Set compiler and flags
 CXX= g++
-CXX_FLAGS= -std=c++11 -O2
-NVCC= nvcc
-NVCC_FLAGS= -O2 -pg -lineinfo 
+CXXFLAGS+= -std=c++11 -O2
 
-# Include and Library directories
-INC= -I./include
-LIB= -L/usr/local/cuda/lib64 -lcudart
+# Set source and output directories
+ifeq ($(DETECTED_OS),Windows)
+	TESTSRCDIR= test\src
+	TESTOBJDIR= test\obj
+	TESTBINDIR= test\bin
+else
+	TESTSRCDIR= test/src
+	TESTOBJDIR= test/obj
+	TESTBINDIR= test/bin
+endif
 
-# File directory structure
-SRC_DIR= src
-OBJ_DIR= obj
-BIN_DIR= bin
+# Set up include and libray directories
+ifeq ($(DETECTED_OS),Windows)
+	TESTINC= -I"$(HOMEPATH)\local\include" -I.\include
+	TESTLIB= -L"$(HOMEPATH)\local\lib" -L.\lib -lglfw3dll -lparicompress
+else 
+	TESTINC= -I$(HOME)/local/include -I./include
+	TESTLIB= -L$(HOME)/local/lib -lGL -lglfw -lcudart
+endif
 
-CPP_FILES= $(wildcard $(SRC_DIR)/*.cpp)
-CU_FILES= $(wildcard $(SRC_DIR)/*.cu)
-OBJ_FILES= $(addprefix $(OBJ_DIR)/,$(notdir $(CPP_FILES:.cpp=.o)))
-CUO_FILES= $(addprefix $(OBJ_DIR)/,$(notdir $(CU_FILES:.cu=.cu.o)))
+# Create output directories and set output file names
+ifeq ($(DETECTED_OS),Windows)
+	mkobjdir:= $(shell if not exist $(TESTOBJDIR) mkdir $(TESTOBJDIR))
+	mkbindir:= $(shell if not exist $(TESTBINDIR) mkdir $(TESTBINDIR))
 
-# Outputs
-OBJS= $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(notdir $(CPP_FILES)))
-OBJS+= $(patsubst %.cu,$(OBJ_DIR)/%.cu.o,$(notdir $(CU_FILES)))
-EXEC= $(addprefix $(BIN_DIR)/, imgconvert)
+	TESTOBJS= $(addprefix $(TESTOBJDIR)\, sample.o)
+	TESTEXEC= $(addprefix $(TESTBINDIR)\, sample.exe)
+else
+	mkdirs:= $(shell mkdir -p $(TESTOBJDIR) $(TESTBINDIR))
 
-# Make directories
-mkdirs:= $(shell mkdir -p $(OBJ_DIR) $(BIN_DIR))
-
-
-# Build everything
-all: $(EXEC)
-
-$(EXEC): $(OBJS)
-	$(CXX) -o $@ $^ $(LIB)
-
-$(OBJ_DIR)/%.cu.o: $(SRC_DIR)/%.cu
-	$(NVCC) $(NVCC_FLAGS) $(INC) -c -o $@ $<
-
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXX_FLAGS) $(INC) -c -o $@ $<
+	TESTOBJS= $(addprefix $(TESTOBJDIR)/, sample.o)
+	TESTEXEC= $(addprefix $(TESTBINDIR)/, sample)
+endif
 
 
-# Remove old files
+# BUILD EVERYTHING# BUILD EVERYTHING
+all: todo
+
+todo:
+	echo "TODO: implement compile library on Linux"
+
+test: $(TESTEXEC)
+$(TESTEXEC): $(TESTOBJS)
+	$(CXX) -o $@ $^ $(TESTLIB)
+
+ifeq ($(DETECTED_OS),Windows)
+$(TESTOBJDIR)\\%.o: $(TESTSRCDIR)\%.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $< $(TESTINC)
+else
+$(TESTOBJDIR)/%.o: $(TESTSRCDIR)/%.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $< $(TESTINC)
+endif
+
+# REMOVE OLD FILES
+ifeq ($(DETECTED_OS),Windows)
 clean:
-	rm -f $(OBJS) $(EXEC)
-
+	del $(TESTOBJS) $(TESTEXEC)
+else
+clean:
+	rm -f $(TESTOBJS) $(TESTEXEC)
+endif
