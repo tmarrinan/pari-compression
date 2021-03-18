@@ -25,12 +25,17 @@ enum PariCompressionType : uint8_t { Grayscale, Rgb, Rgba, Dxt1, ActivePixel };
 PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariCompressionType type);
 PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
                                               PariGpuBuffer gpu_out_buf, uint8_t *gray);
+PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
+                                         PariGpuBuffer gpu_out_buf,uint8_t *dxt1);
 
 // OpenGL - PARI functions
 PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResourceDescription *resrc_description_ptr);
 PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
-                                                  PariGpuBuffer gpu_out_buf, uint32_t texture, uint32_t width, uint32_t height, 
+                                                  uint32_t texture, PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, 
                                                   uint8_t *gray);
+PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
+                                             uint32_t texture, PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, 
+                                             uint8_t *dxt1);
 
 
 //void initImageConverter(int width, int height);

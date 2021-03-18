@@ -85,13 +85,17 @@ int main(int argc, char **argv)
 
         // Allocate output images (CPU and GPU)
         uint8_t *gray = new uint8_t[img_w * img_h];
+        uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
+        PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
 
-        // Convert rgba to grayscale
-        pariGetRgbaTextureAsGrayscale(resource, description, gray_gpu_buffer, texture, img_w, img_h, gray);
+        // Convert rgba to grayscale and dxt1
+        pariGetRgbaTextureAsGrayscale(resource, description, texture, gray_gpu_buffer, img_w, img_h, gray);
+        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
 
-        // Save result as pgm file
-        savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+        // Save results as pgm and dds files
+        savePgm("pari_result_cg_gray.pgm", img_w, img_h, gray);
+        saveDds("pari_result_cg_dxt1.dds", img_w, img_h, dxt1);
     }
     else
     {
@@ -103,13 +107,17 @@ int main(int argc, char **argv)
         
         // Allocate output images (CPU and GPU)
         uint8_t *gray = new uint8_t[img_w * img_h];
+        uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
+        PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
 
         // Convert rgba to grayscale
         pariRgbaBufferToGrayscale(rgba, img_w, img_h, rgba_gpu_buffer, gray_gpu_buffer, gray);
+        pariRgbaBufferToDxt1(rgba, img_w, img_h, rgba_gpu_buffer, dxt1_gpu_buffer, dxt1);
 
         // Save result as pgm file
         savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+        saveDds("pari_result_dxt1.dds", img_w, img_h, dxt1);
     }
 
     return 0;
