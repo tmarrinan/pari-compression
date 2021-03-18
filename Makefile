@@ -23,7 +23,7 @@ endif
 # Set up include and libray directories
 ifeq ($(DETECTED_OS),Windows)
 	TESTINC= -I"$(HOMEPATH)\local\include" -I.\include
-	TESTLIB= -L"$(HOMEPATH)\local\lib" -L.\lib -lglfw3dll -lparicompress
+	TESTLIB= -L"$(HOMEPATH)\local\lib" -L.\lib -lglfw3dll -lopengl32 -lparicompress
 else 
 	TESTINC= -I$(HOME)/local/include -I./include
 	TESTLIB= -L$(HOME)/local/lib -lGL -lglfw -lcudart

@@ -44,7 +44,7 @@ struct PariCGGrayscaleFunctor
     uint32_t width;
     uint32_t height;
     PariCGGrayscaleFunctor(cudaSurfaceObject_t const& rgba_input, thrust::device_vector<uint8_t>& gray_output,
-                     uint32_t width_input, uint32_t height_input)
+                           uint32_t width_input, uint32_t height_input)
     {
         rgba = rgba_input;
         gray = thrust::raw_pointer_cast(gray_output.data());
@@ -150,6 +150,8 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
                                                   PariGpuBuffer gpu_out_buf, uint32_t texture, uint32_t width, uint32_t height, 
                                                   uint8_t *gray)
 {
+    uint64_t start = currentTime();
+    
     cudaArray *array;
     cudaSurfaceObject_t target;
 
@@ -173,8 +175,12 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
     // Copy image data back to host
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height), gray);
 
-    // release texture for use by OpenGL again
+    // Release texture for use by OpenGL again
+    cudaDestroySurfaceObject(target);
     cudaGraphicsUnmapResources(1, &cuda_resource, 0);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariGetRgbaTextureAsGrayscale (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 }
 
 

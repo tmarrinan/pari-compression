@@ -1,6 +1,8 @@
 #include <iostream>
 #include <string>
 #include <fstream>
+#define GLFW_INCLUDE_GLEXT
+#include <GLFW/glfw3.h>
 #include "paricompress.h"
 
 typedef struct DdsPixelFormat {
@@ -41,21 +43,74 @@ void saveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pix
 
 int main(int argc, char **argv)
 {
-    // Read input rgba image (ppm file) and allocate space on GPU
-    int img_w, img_h;
-    uint8_t *rgba;
-    readPpm("resrc/ust_campus.ppm", &img_w, &img_h, &rgba);
-    PariGpuBuffer rgba_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Rgba);
-    
-    // Allocate output images (CPU and GPU)
-    uint8_t *gray = new uint8_t[img_w * img_h];
-    PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
+    if (argc > 1 && std::string(argv[1]) == "opengl")
+    {
+        // Initialize GLFW
+        if (!glfwInit())
+        {
+            fprintf(stderr, "Error: could not initialize GLFW\n");
+            exit(EXIT_FAILURE);
+        }
 
-    // Convert rgba to grayscale
-    pariRgbaBufferToGrayscale(rgba, img_w, img_h, rgba_gpu_buffer, gray_gpu_buffer, gray);
+        // Create a window and its OpenGL context
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        GLFWwindow *window = glfwCreateWindow(320, 180, "PARI-Compress Sample", NULL, NULL);
 
-    // Save result as pgm file
-    savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+        // Make window's context current
+        glfwMakeContextCurrent(window);
+        glfwSwapInterval(1);
+
+        // Read input rgba image (ppm file)
+        int img_w, img_h;
+        uint8_t *rgba;
+        readPpm("resrc/airplane_4k.ppm", &img_w, &img_h, &rgba);
+
+        // Create OpenGL texture and upload rgba image
+        GLuint texture;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        // Register image and get description
+        PariCGResourceDescription description;
+        PariCGResource resource = pariRegisterImage(texture, &description);
+
+        // Allocate output images (CPU and GPU)
+        uint8_t *gray = new uint8_t[img_w * img_h];
+        PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
+
+        // Convert rgba to grayscale
+        pariGetRgbaTextureAsGrayscale(resource, description, gray_gpu_buffer, texture, img_w, img_h, gray);
+
+        // Save result as pgm file
+        savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+    }
+    else
+    {
+        // Read input rgba image (ppm file) and allocate space on GPU
+        int img_w, img_h;
+        uint8_t *rgba;
+        readPpm("resrc/airplane_4k.ppm", &img_w, &img_h, &rgba);
+        PariGpuBuffer rgba_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Rgba);
+        
+        // Allocate output images (CPU and GPU)
+        uint8_t *gray = new uint8_t[img_w * img_h];
+        PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
+
+        // Convert rgba to grayscale
+        pariRgbaBufferToGrayscale(rgba, img_w, img_h, rgba_gpu_buffer, gray_gpu_buffer, gray);
+
+        // Save result as pgm file
+        savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+    }
 
     return 0;
 }
