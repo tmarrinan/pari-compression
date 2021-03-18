@@ -10,6 +10,10 @@
 #include <thrust/iterator/counting_iterator.h>
 #include "paricompress.h"
 
+// TODO: look into surface<void, cudaSurfaceType2D>
+surface<void, cudaSurfaceType2D> rgba_surface;
+
+
 __host__ __device__ static void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64]);
 __host__ __device__ static void getMinMaxColors(uint8_t tile[64], uint8_t color_min[3], uint8_t color_max[3]);
 __host__ __device__ static uint16_t colorTo565(uint8_t color[3]);
@@ -252,7 +256,7 @@ PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResource
     struct cudaGraphicsResource *cuda_resource;
     struct cudaResourceDesc **description_ptr = (struct cudaResourceDesc **)resrc_description_ptr;
     
-    cudaGraphicsGLRegisterImage(&cuda_resource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsReadOnly);
+    cudaGraphicsGLRegisterImage(&cuda_resource, texture, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore);
     
     *description_ptr = new struct cudaResourceDesc();
     memset(*description_ptr, 0, sizeof(struct cudaResourceDesc));
@@ -276,12 +280,10 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
     struct cudaResourceDesc description = *(struct cudaResourceDesc *)resrc_description;
 
     // Enable CUDA to access OpenGL texture
-    glBindTexture(GL_TEXTURE_2D, texture);
     cudaGraphicsMapResources(1, &cuda_resource, 0);
     cudaGraphicsSubResourceGetMappedArray(&array, cuda_resource, 0, 0);
     description.res.array.array = array;
     cudaCreateSurfaceObject(&target, &description);
-    glBindTexture(GL_TEXTURE_2D, 0);
     
     // Convert RGBA texture to Grayscale buffer
     thrust::counting_iterator<size_t> it(0);
@@ -313,21 +315,25 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
     struct cudaResourceDesc description = *(struct cudaResourceDesc *)resrc_description;
 
     // Enable CUDA to access OpenGL texture
-    glBindTexture(GL_TEXTURE_2D, texture);
     cudaGraphicsMapResources(1, &cuda_resource, 0);
     cudaGraphicsSubResourceGetMappedArray(&array, cuda_resource, 0, 0);
     description.res.array.array = array;
     cudaCreateSurfaceObject(&target, &description);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
+
+    printf("PARI> pariGetRgbaTextureAsDxt1 MAPPING (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
+
     // Convert RGBA texture to DXT1 buffer
     const int k = 16;                        // pixels per tile
     const int n = (width * height) / k;      // number of tiles
     thrust::counting_iterator<size_t> it(0);
     thrust::for_each_n(thrust::device, it, n, PariCGDxt1Functor(target, *output_ptr, width, height));
 
+    printf("PARI> pariGetRgbaTextureAsDxt1 COMPUTE (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
+
     // Copy image data back to host
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height / 2), dxt1);
+
+    printf("PARI> pariGetRgbaTextureAsDxt1 COPY (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
 
     // Release texture for use by OpenGL again
     cudaDestroySurfaceObject(target);

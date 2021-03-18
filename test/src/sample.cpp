@@ -79,6 +79,8 @@ int main(int argc, char **argv)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        glFinish();
+
         // Register image and get description
         PariCGResourceDescription description;
         PariCGResource resource = pariRegisterImage(texture, &description);
@@ -91,6 +93,8 @@ int main(int argc, char **argv)
 
         // Convert rgba to grayscale and dxt1
         pariGetRgbaTextureAsGrayscale(resource, description, texture, gray_gpu_buffer, img_w, img_h, gray);
+        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
+        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
         pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
 
         // Save results as pgm and dds files
