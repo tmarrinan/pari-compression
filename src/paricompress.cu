@@ -269,6 +269,8 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
                                                   uint32_t texture, PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, 
                                                   uint8_t *gray)
 {
+    cudaDeviceSynchronize(); // wait for OpenGL commands to finish and GPU to become available
+
     uint64_t start = currentTime();
     
     cudaArray *array;
@@ -304,6 +306,8 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
                                              uint32_t texture, PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, 
                                              uint8_t *dxt1)
 {
+    cudaDeviceSynchronize(); // wait for OpenGL commands to finish and GPU to become available
+
     uint64_t start = currentTime();
     
     cudaArray *array;
@@ -320,20 +324,14 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
     description.res.array.array = array;
     cudaCreateSurfaceObject(&target, &description);
 
-    printf("PARI> pariGetRgbaTextureAsDxt1 MAPPING (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
-
     // Convert RGBA texture to DXT1 buffer
     const int k = 16;                        // pixels per tile
     const int n = (width * height) / k;      // number of tiles
     thrust::counting_iterator<size_t> it(0);
     thrust::for_each_n(thrust::device, it, n, PariCGDxt1Functor(target, *output_ptr, width, height));
 
-    printf("PARI> pariGetRgbaTextureAsDxt1 COMPUTE (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
-
     // Copy image data back to host
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height / 2), dxt1);
-
-    printf("PARI> pariGetRgbaTextureAsDxt1 COPY (%dx%d): %.6lf\n", width, height, (double)(currentTime() - start) / 1000000.0);
 
     // Release texture for use by OpenGL again
     cudaDestroySurfaceObject(target);

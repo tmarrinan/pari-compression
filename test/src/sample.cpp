@@ -3,6 +3,7 @@
 #include <fstream>
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
+#include <cuda_runtime_api.h>
 #include "paricompress.h"
 
 typedef struct DdsPixelFormat {
@@ -76,12 +77,13 @@ int main(int argc, char **argv)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         glBindTexture(GL_TEXTURE_2D, 0);
 
         glFinish();
 
         // Register image and get description
+        cudaSetDevice(1);
         PariCGResourceDescription description;
         PariCGResource resource = pariRegisterImage(texture, &description);
 
@@ -93,8 +95,6 @@ int main(int argc, char **argv)
 
         // Convert rgba to grayscale and dxt1
         pariGetRgbaTextureAsGrayscale(resource, description, texture, gray_gpu_buffer, img_w, img_h, gray);
-        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
-        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
         pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
 
         // Save results as pgm and dds files
