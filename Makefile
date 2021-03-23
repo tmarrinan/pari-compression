@@ -81,7 +81,7 @@ $(TESTEXEC): $(TESTOBJS)
 	$(NVCC) -o $@ $^ $(TESTLIB)
 
 $(TESTOBJDIR)/%.o: $(TESTSRCDIR)/%.cpp
-	$(NVCC) $(CXXFLAGS) -c -o $@ $(TESTINC) $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $(TESTINC) $<
 endif
 
 # REMOVE OLD FILES

@@ -3,7 +3,6 @@
 #include <fstream>
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
-#include <cuda_runtime_api.h>
 #include "paricompress.h"
 
 typedef struct DdsPixelFormat {
@@ -64,6 +63,9 @@ int main(int argc, char **argv)
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1);
 
+        // Select GPU to perform compression on (use same as the one used for OpenGL rendering)
+        pariSetGpuDevice(PARI_DEVICE_OPENGL);
+
         // Read input rgba image (ppm file)
         int img_w, img_h;
         uint8_t *rgba;
@@ -83,7 +85,6 @@ int main(int argc, char **argv)
         glFinish();
 
         // Register image and get description
-        cudaSetDevice(1);
         PariCGResourceDescription description;
         PariCGResource resource = pariRegisterImage(texture, &description);
 
@@ -103,6 +104,8 @@ int main(int argc, char **argv)
     }
     else
     {
+        pariSetGpuDevice(0);
+
         // Read input rgba image (ppm file) and allocate space on GPU
         int img_w, img_h;
         uint8_t *rgba;

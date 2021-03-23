@@ -158,6 +158,18 @@ struct PariCGDxt1Functor
 
 
 // Standard PARI functions
+PARI_DLLEXPORT void pariSetGpuDevice(int device)
+{
+    if (device == PARI_DEVICE_OPENGL)
+    {
+        unsigned int device_count;
+        int devices[8];
+        cudaGLGetDevices(&device_count, devices, 8, cudaGLDeviceListAll);
+        device = devices[0];
+    }
+    cudaSetDevice(device);
+}
+
 PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariCompressionType type)
 {
     PariGpuBuffer buffers;
