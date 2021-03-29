@@ -65,7 +65,16 @@ int main(int argc, char **argv)
 
     /*
     
+    step 1) Whether or not a start of new run (1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+    step 2) Group every pixel by run ID (1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7)
+    step 3) Sum of number of pixels per run ID (3, 3, 3, 1, 1, 4, 9, 0)
+    step 4a) Calc how many active pixels have been stored before it (0, 3, 4, 8)
+    step 4b) Calc how many total pixels are before it (0, 3, 6, 9, 10, 11, 15, 24, 24)
+    step 5)  4a is the write index, using the calc below (run * 8 + (8 * (run_index + 1))). 4b is the read index, odd indices only. RGBA * 4, depth is just the number.
+
     3, 3, 3, 1, 1, 4, 9, 0, 0, 0..
+
+    CHOP OFF AT THIS POINT ^^^
 
     all odd indexed values (3, 1, 4, 0) ACTIVE PIXEL RUNS
 
@@ -73,7 +82,7 @@ int main(int argc, char **argv)
 
     offset given run: prefix sum for that run * 8 + (8 * (run_index + 1))
 
-    first run offset is 8 (0 * 8 + (8 * (0 + 1))) FROM START OF FINAL GOAL ARRAY
+    first run offset is 0 * 8 + (8 * (0 + 1)) = 8 FROM START OF FINAL GOAL ARRAY
 
     second run: 3 * 8 + (8 * (1 + 1)) = 40
 
@@ -112,6 +121,8 @@ int main(int argc, char **argv)
     
     //put my test case here, comment out the rest of the test cases.
     rgbaDepthToActivePixel(rgba, depth, active_pixels);
+
+
     // convert rgba image to grayscale image
 
     /*

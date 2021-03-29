@@ -1,0 +1,2 @@
+nvcc -O2 -pg -lineinfo  -I./include -c -o obj/imgconverter.cu.o src/imgconverter.cu
+Makefile:36: recipe for target 'obj/imgconverter.cu.o' failed

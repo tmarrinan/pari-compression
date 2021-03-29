@@ -8,6 +8,8 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
+#include <thrust/functional.h>
+#include <thrust/fill.h>
 
 #include "imgconverter.h"
 
@@ -21,6 +23,8 @@ static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
 static thrust::device_vector<uint32_t> *run_groups;
 static thrust::device_vector<uint32_t>* run_counts;
+static thrust::device_vector<uint32_t>* run_actives;
+static thrust::device_vector<uint32_t>* run_all;
 
 
 __host__ __device__ void extractTile4x4(uint32_t offset, const uint8_t *pixels, int width, uint8_t out_tile[64]);
@@ -34,6 +38,54 @@ __host__ __device__ void writeUint16(uint8_t *buffer, uint32_t offset, uint16_t 
 __host__ __device__ void writeUint32(uint8_t *buffer, uint32_t offset, uint32_t value);
 
 uint64_t currentTime();
+
+template <typename Iterator>
+class strided_range
+{
+    public:
+
+    typedef typename thrust::iterator_difference<Iterator>::type difference_type;
+
+    struct stride_functor : public thrust::unary_function<difference_type,difference_type>
+    {
+        difference_type stride;
+
+        stride_functor(difference_type stride)
+            : stride(stride) {}
+
+        __host__ __device__
+        difference_type operator()(const difference_type& i) const
+        { 
+            return stride * i;
+        }
+    };
+
+    typedef typename thrust::counting_iterator<difference_type>                   CountingIterator;
+    typedef typename thrust::transform_iterator<stride_functor, CountingIterator> TransformIterator;
+    typedef typename thrust::permutation_iterator<Iterator,TransformIterator>     PermutationIterator;
+
+    // type of the strided_range iterator
+    typedef PermutationIterator iterator;
+
+    // construct strided_range for the range [first,last)
+    strided_range(Iterator first, Iterator last, difference_type stride)
+        : first(first), last(last), stride(stride) {}
+   
+    iterator begin(void) const
+    {
+        return PermutationIterator(first, TransformIterator(CountingIterator(0), stride_functor(stride)));
+    }
+
+    iterator end(void) const
+    {
+        return begin() + ((last - first) + (stride - 1)) / stride;
+    }
+    
+    protected:
+    Iterator first;
+    Iterator last;
+    difference_type stride;
+};
 
 struct ActivePixelIceTFunctor
 
@@ -70,6 +122,63 @@ struct ActivePixelIceTFunctor
             else
             {
                 active[thread_id] = 0;
+            }
+        }
+    }
+};
+
+struct ActivePixelIceTFinalizeFunctor
+
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint32_t* write_index;
+    uint32_t* read_index;
+    int num_runs;
+    int width;
+    int height;
+    uint8_t* final;
+    ActivePixelIceTFinalizeFunctor(int num_runs_input, int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<float> const& depth_input, thrust::device_vector<uint32_t>& write_input, thrust::device_vector<uint32_t>& read_input,  thrust::device_vector<uint8_t>& output)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        write_index = thrust::raw_pointer_cast(write_input.data());
+        read_index = thrust::raw_pointer_cast(read_input.data());
+        final = thrust::raw_pointer_cast(output.data());
+        num_runs = num_runs_input;
+        width = width_input;
+        height = height_input;
+    }
+    __host__ __device__ void operator()(int thread_id)
+    {
+        if(thread_id < (num_runs / 2)) //active runs
+        {
+            
+            uint32_t read_position = read_index[2 * thread_id + 1];
+
+
+            uint32_t write_position = write_index[thread_id] * 8 + (8 * (thread_id + 1));
+            uint32_t num_active = (width * height) - read_position;
+            if(thread_id < ( num_runs / 2 ) - 1)
+            {
+                num_active = read_index[2 * thread_id + 2] - read_position;
+
+            }
+            uint32_t num_inactive = read_position - read_index[2 * thread_id];
+            writeUint32(final, write_position - 8, num_inactive);
+            writeUint32(final, write_position - 4, num_active);
+            for(int i = 0; i < num_active; i++)
+            {
+                uint8_t red = rgba[4 * (read_position + i)];
+                uint8_t green = rgba[4 * (read_position + i) + 1];
+                uint8_t blue = rgba[4 * (read_position + i) + 2];
+                uint8_t alpha = rgba[4 * (read_position + i) + 3];
+                float depth_pos = depth[read_position + i];
+                final[write_position + 8 * i] = red;
+                final[write_position + 8 * i + 1] = green;
+                final[write_position + 8 * i + 2] = blue;
+                final[write_position + 8 * i + 3] = alpha;
+                memcpy(final + write_position + 8 * i + 4, &depth_pos, 4);
             }
         }
     }
@@ -487,6 +596,8 @@ void initImageConverter(int width, int height)
     runs = new thrust::device_vector<uint8_t>(img_w * img_h);
     run_groups = new thrust::device_vector<uint32_t>(img_w * img_h);
     run_counts = new thrust::device_vector<uint32_t>(img_w * img_h);
+    run_actives = new thrust::device_vector<uint32_t>(img_w * img_h / 2);
+    run_all = new thrust::device_vector<uint32_t>(img_w * img_h);
     num_runs = new thrust::device_vector<uint16_t>((img_w * img_h) / 256);
     sums = new thrust::device_vector<uint32_t>((img_w * img_h) / 256);
 }
@@ -518,13 +629,26 @@ void rgbaDepthToActivePixel(uint8_t* rgba, float* depth, uint8_t* active_pixel)
     thrust::for_each_n(thrust::device, it, img_w * img_h, ActivePixelIceTFunctor(img_w, img_h, *image_input_ptr, *depth_input_ptr, *runs));
 
     thrust::copy(runs->begin(), runs->end(), std::ostream_iterator<int>(std::cout, ", "));
-    printf("\n");
+    printf("\n\n");
     thrust::inclusive_scan(thrust::device, runs->begin(), runs->end(), run_groups->begin());
     thrust::copy(run_groups->begin(), run_groups->end(), std::ostream_iterator<int>(std::cout, ", "));
-    printf("\n");
+    printf("\n\n");
     thrust::reduce_by_key(thrust::device, run_groups->begin(), run_groups->end(), thrust::make_constant_iterator(1), thrust::discard_iterator<uint32_t>(), run_counts->begin());
     thrust::copy(run_counts->begin(), run_counts->end(), std::ostream_iterator<int>(std::cout, ", "));
-    printf("\n");
+    printf("\n\n");
+    strided_range<thrust::device_vector<uint32_t>::iterator> odds(run_counts->begin() + 1, run_counts->end(), 2);
+    thrust::exclusive_scan(thrust::device, odds.begin(), odds.end(), run_actives->begin());
+    thrust::copy(run_actives->begin(), run_actives->end(), std::ostream_iterator<int>(std::cout, ", "));
+    printf("\n\n");
+    thrust::exclusive_scan(thrust::device, run_counts->begin(), run_counts->end(), run_all->begin());
+    thrust::copy(run_all->begin(), run_all->end(), std::ostream_iterator<int>(std::cout, ", "));
+
+    printf("\n\n");
+
+    thrust::for_each_n(thrust::device, it, 8, ActivePixelIceTFinalizeFunctor(8, 8, 3, *image_input_ptr, *depth_input_ptr, *run_actives, *run_all, *image_output_ptr));
+    thrust::copy(image_output_ptr->begin(), image_output_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+
+    printf("\n\n");
 }
 
 
