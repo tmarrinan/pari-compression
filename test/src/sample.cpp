@@ -125,6 +125,34 @@ int main(int argc, char **argv)
         // Save result as pgm file
         savePgm("pari_result_gray.pgm", img_w, img_h, gray);
         saveDds("pari_result_dxt1.dds", img_w, img_h, dxt1);
+
+        // TEST - active pixel encoding
+        int ap_width = 8;
+        int ap_height = 3;
+        uint8_t ap_rgba[96] = {
+            255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255,
+            0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255
+        };
+        float ap_depth[24] = {
+            0.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
+        };
+        uint8_t* active_pixels = new uint8_t[ap_width * ap_height * 8 + 8];
+        uint32_t ap_size;
+
+        PariGpuBuffer ap_rgba_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Rgba);
+        PariGpuBuffer ap_depth_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Depth);
+        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::ActivePixel);
+
+        pariRgbaBufferToActivePixel(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
+                                    activepixel_gpu_buffer, active_pixels, &ap_size);
+
+        printf("Active Pixel Buffer (%u bytes):\n", ap_size);
+        for (int i = 0; i < ap_size; i++)
+        {
+            printf(" %u", active_pixels[i]);
+        }
+        printf("\n");
     }
 
     return 0;

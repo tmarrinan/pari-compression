@@ -8,6 +8,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/discard_iterator.h>
 #include "paricompress.h"
 
 // TODO: look into surface<void, cudaSurfaceType2D>
@@ -26,6 +27,55 @@ __device__ static void extractCGTile4x4(uint32_t offset_x, uint32_t offset_y, co
 
 static uint64_t currentTime();
 
+
+// CUDA Thrust strided range iterator
+template <typename Iterator>
+class strided_range
+{
+    public:
+
+    typedef typename thrust::iterator_difference<Iterator>::type difference_type;
+
+    struct stride_functor : public thrust::unary_function<difference_type,difference_type>
+    {
+        difference_type stride;
+
+        stride_functor(difference_type stride)
+            : stride(stride) {}
+
+        __host__ __device__
+        difference_type operator()(const difference_type& i) const
+        { 
+            return stride * i;
+        }
+    };
+
+    typedef typename thrust::counting_iterator<difference_type>                   CountingIterator;
+    typedef typename thrust::transform_iterator<stride_functor, CountingIterator> TransformIterator;
+    typedef typename thrust::permutation_iterator<Iterator,TransformIterator>     PermutationIterator;
+
+    // type of the strided_range iterator
+    typedef PermutationIterator iterator;
+
+    // construct strided_range for the range [first,last)
+    strided_range(Iterator first, Iterator last, difference_type stride)
+        : first(first), last(last), stride(stride) {}
+   
+    iterator begin(void) const
+    {
+        return PermutationIterator(first, TransformIterator(CountingIterator(0), stride_functor(stride)));
+    }
+
+    iterator end(void) const
+    {
+        return begin() + ((last - first) + (stride - 1)) / stride;
+    }
+    
+    protected:
+    Iterator first;
+    Iterator last;
+    difference_type stride;
+};
 
 // CUDA Thrust functors
 struct PariGrayscaleFunctor
@@ -87,6 +137,113 @@ struct PariDxt1Functor
             writeUint16(dxt1, write_pos, colorTo565(color_max));
        	    writeUint16(dxt1, write_pos + 2, colorTo565(color_min));
        	    writeUint32(dxt1, write_pos + 4, colorIndices(tile, color_min, color_max));
+        }
+    }
+};
+
+struct PariActivePixelFunctor
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint8_t* active;
+    int width;
+    int height;
+    float max_depth;
+    PariActivePixelFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input,
+                           thrust::device_vector<float> const& depth_input, thrust::device_vector<uint8_t>& active_output)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        active = thrust::raw_pointer_cast(active_output.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __host__ __device__ void operator()(int thread_id)
+    {
+        if (thread_id < width * height)
+        {
+            // start of new pixel run
+            if (thread_id == 0 || (depth[thread_id] != max_depth && depth[thread_id - 1] == max_depth) ||
+               (depth[thread_id] == max_depth && depth[thread_id - 1] != max_depth))
+            {
+                active[thread_id] = 1;
+            }
+
+            // continuing current run
+            else
+            {
+                active[thread_id] = 0;
+            }
+        }
+    }
+};
+
+struct PariActivePixelFinalizeFunctor
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint32_t* read_index;
+    uint32_t* write_index;
+    uint32_t num_runs;
+    int width;
+    int height;
+    uint8_t* compressed;
+    uint32_t* compressed_size;
+    float max_depth;
+    PariActivePixelFinalizeFunctor(uint32_t num_runs_input, int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input,
+                                   thrust::device_vector<float> const& depth_input, thrust::device_vector<uint32_t>& read_input,
+                                   thrust::device_vector<uint32_t>& write_input, thrust::device_vector<uint8_t>& output,
+                                   thrust::device_vector<uint32_t>& output_size)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        read_index = thrust::raw_pointer_cast(read_input.data());
+        write_index = thrust::raw_pointer_cast(write_input.data());
+        compressed = thrust::raw_pointer_cast(output.data());
+        compressed_size = thrust::raw_pointer_cast(output_size.data());
+        num_runs = num_runs_input;
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __host__ __device__ void operator()(int thread_id)
+    {
+        if(thread_id < (num_runs / 2)) //active runs
+        {
+            int read_first_inactive = (depth[0] == max_depth) ? 1 : 0;
+            uint32_t read_position = read_index[2 * thread_id + read_first_inactive];
+
+            uint32_t write_position = write_index[thread_id] * 8 + (8 * (thread_id + 1));
+            uint32_t num_active = (thread_id < ( num_runs / 2 ) - 1) ?
+                                  read_index[2 * thread_id + read_first_inactive + 1] - read_position :
+                                  (width * height) - read_position;
+            uint32_t num_inactive = (2 * thread_id + read_first_inactive - 1 >= 0) ?
+                                    read_position - read_index[2 * thread_id + read_first_inactive - 1] :
+                                    read_position;
+            //writeUint32(compressed, write_position - 8, num_inactive);
+            //writeUint32(compressed, write_position - 4, num_active);
+            memcpy(compressed + write_position - 8, &num_inactive, 4);
+            memcpy(compressed + write_position - 4, &num_active, 4);
+            for (int i = 0; i < num_active; i++)
+            {
+                //uint8_t red = rgba[4 * (read_position + i)];
+                //uint8_t green = rgba[4 * (read_position + i) + 1];
+                //uint8_t blue = rgba[4 * (read_position + i) + 2];
+                //uint8_t alpha = rgba[4 * (read_position + i) + 3];
+                //compressed[write_position + 8 * i] = red;
+                //compressed[write_position + 8 * i + 1] = green;
+                //compressed[write_position + 8 * i + 2] = blue;
+                //compressed[write_position + 8 * i + 3] = alpha;
+                const uint8_t *color_at_pos = rgba + (4 * (read_position + i));
+                memcpy(compressed + write_position + 8 * i, color_at_pos, 4);
+                const float *depth_at_pos = depth + (read_position + i);
+                memcpy(compressed + write_position + 8 * i + 4, depth_at_pos, 4);
+            }
+            if (thread_id == (num_runs / 2) - 1)
+            {
+                compressed_size[0] = write_position + 8 * num_active;
+            }
         }
     }
 };
@@ -175,6 +332,14 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
     PariGpuBuffer buffers;
     switch (type)
     {
+        case PariCompressionType::Rgba:
+            buffers = (PariGpuBuffer)malloc(sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 4));
+            break;
+        case PariCompressionType::Depth:
+            buffers = (PariGpuBuffer)malloc(sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<float>(width * height));
+            break;
         case PariCompressionType::Grayscale:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));
@@ -182,10 +347,6 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
         case PariCompressionType::Rgb:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 3));
-            break;
-        case PariCompressionType::Rgba:
-            buffers = (PariGpuBuffer)malloc(sizeof(void*));
-            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 4));
             break;
         case PariCompressionType::Dxt1:
             if (width % 4 != 0 || height % 4 != 0)
@@ -199,13 +360,14 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
             }
             break;
         case PariCompressionType::ActivePixel:
-            buffers = (PariGpuBuffer)malloc(6 * sizeof(void*));
+            buffers = (PariGpuBuffer)malloc(7 * sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel starts a new run (0 or 1)
             buffers[1] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // id for each run (inclusive scan of buffers[0])
             buffers[2] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // number of pixels in each run (reduce_by_key of buffers[1])
             buffers[3] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // offset in original image where each run starts (exclusive scan of buffers[2])
             buffers[4] = (void*)(new thrust::device_vector<uint32_t>(width * height / 2));    // offset in compressed image where each run starts (exclusive scan of odd indices in buffers[2])
             buffers[5] = (void*)(new thrust::device_vector<uint8_t>(width * height * 8 + 8)); // final compressed image
+            buffers[6] = (void*)(new thrust::device_vector<uint32_t>(1));                     // size in bytes of final compressed image
             break;
         default:
             buffers = NULL;
@@ -260,6 +422,80 @@ PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t
 
     uint64_t end = currentTime();
     printf("PARI> pariRgbaBufferToDxt1 (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+}
+
+PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
+{
+    uint64_t start = currentTime();
+
+    // Get handles to input and output image pointers
+    thrust::device_vector<uint8_t> *input_rgba_ptr = (thrust::device_vector<uint8_t>*)(gpu_rgba_in_buf[0]);
+    thrust::device_vector<float> *input_depth_ptr = (thrust::device_vector<float>*)(gpu_depth_in_buf[0]);
+    thrust::device_vector<uint8_t> *new_run_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[0]);
+    thrust::device_vector<uint32_t> *run_id_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[1]);
+    thrust::device_vector<uint32_t> *run_counts_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[2]);
+    thrust::device_vector<uint32_t> *read_offset_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[3]);
+    thrust::device_vector<uint32_t> *write_offset_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[4]);
+    thrust::device_vector<uint8_t> *output_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[5]);
+    thrust::device_vector<uint32_t> *output_size_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[6]);
+
+    // Upload RGBA and Depth buffers to GPU
+    thrust::copy(rgba, rgba + (width * height * 4), input_rgba_ptr->begin());
+    thrust::copy(depth, depth + (width * height), input_depth_ptr->begin());
+
+    // Convert RGBA and Depth buffers to Active Pixel buffer
+    thrust::counting_iterator<size_t> it(0);
+    //   - whether or not each pixel starts a new run (0 or 1)
+    thrust::for_each_n(thrust::device, it, width * height, PariActivePixelFunctor(width, height, *input_rgba_ptr,
+                       *input_depth_ptr, *new_run_ptr));
+    //thrust::copy(new_run_ptr->begin(), new_run_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    //printf("\n\n");
+    //   - id for each run
+    thrust::inclusive_scan(thrust::device, new_run_ptr->begin(), new_run_ptr->end(), run_id_ptr->begin());
+    //thrust::copy(run_id_ptr->begin(), run_id_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    //printf("\n\n");
+    //   - number of pixels in each run
+    thrust::reduce_by_key(thrust::device, run_id_ptr->begin(), run_id_ptr->end(), thrust::make_constant_iterator(1),
+                          thrust::discard_iterator<uint32_t>(), run_counts_ptr->begin());
+    //thrust::copy(run_counts_ptr->begin(), run_counts_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    //printf("\n\n");
+    //   - offset in original image where each run starts
+    thrust::exclusive_scan(thrust::device, run_counts_ptr->begin(), run_counts_ptr->end(), read_offset_ptr->begin());
+    //thrust::copy(read_offset_ptr->begin(), read_offset_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    //printf("\n\n");
+    //   - offset in compressed image where each run starts
+    strided_range<thrust::device_vector<uint32_t>::iterator>* every_other;
+    if(depth[0] != 1.0f)
+    {
+        every_other = new strided_range<thrust::device_vector<uint32_t>::iterator>(run_counts_ptr->begin(), run_counts_ptr->end(), 2);
+    }
+    else
+    {
+        every_other = new strided_range<thrust::device_vector<uint32_t>::iterator>(run_counts_ptr->begin() + 1, run_counts_ptr->end(), 2);
+    }
+    thrust::exclusive_scan(thrust::device, every_other->begin(), every_other->end(), write_offset_ptr->begin());
+    delete every_other;
+    //thrust::copy(write_offset_ptr->begin(), write_offset_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    //printf("\n\n");
+    //   - total number of runs
+    uint32_t total_num_runs;
+    float last_depth = depth[width * height - 1];
+    thrust::copy(run_id_ptr->end() - 1, run_id_ptr->end(), &total_num_runs);
+    if(last_depth == 1.0f) total_num_runs++;
+    if(total_num_runs % 2 != 0) total_num_runs++;
+    //printf("total num runs: %u\n\n", total_num_runs);
+    //   - finalize compressed active pixel image
+    thrust::for_each_n(thrust::device, it, total_num_runs, PariActivePixelFinalizeFunctor(total_num_runs, width, height, *input_rgba_ptr,
+                       *input_depth_ptr, *read_offset_ptr, *write_offset_ptr, *output_ptr, *output_size_ptr));
+
+    // Copy image data back to host
+    thrust::copy(output_size_ptr->begin(), output_size_ptr->end(), active_pixel_size);
+    thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 }
 
 // OpenGL - PARI functions
