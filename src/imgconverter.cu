@@ -11,6 +11,8 @@
 #include <thrust/functional.h>
 #include <thrust/fill.h>
 
+#include <thrust/remove.h>
+
 #include "imgconverter.h"
 
 static int img_w;
@@ -18,6 +20,7 @@ static int img_h;
 static thrust::device_vector<uint8_t> *image_input_ptr;
 static thrust::device_vector<float> *depth_input_ptr;
 static thrust::device_vector<uint8_t> *image_output_ptr;
+static thrust::device_vector<uint32_t> *image_output_size_ptr;
 static thrust::device_vector<uint8_t> *runs;
 static thrust::device_vector<uint16_t> *num_runs;
 static thrust::device_vector<uint32_t> *sums;
@@ -134,16 +137,18 @@ struct ActivePixelIceTFinalizeFunctor
     const float* depth;
     uint32_t* write_index;
     uint32_t* read_index;
-    int num_runs;
+    uint32_t num_runs;
     int width;
     int height;
+    uint32_t* active_pixel_size;
     uint8_t* final;
-    ActivePixelIceTFinalizeFunctor(int num_runs_input, int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<float> const& depth_input, thrust::device_vector<uint32_t>& write_input, thrust::device_vector<uint32_t>& read_input,  thrust::device_vector<uint8_t>& output)
+    ActivePixelIceTFinalizeFunctor(uint32_t num_runs_input, int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input, thrust::device_vector<float> const& depth_input, thrust::device_vector<uint32_t>& write_input, thrust::device_vector<uint32_t>& read_input,  thrust::device_vector<uint32_t>& output_size, thrust::device_vector<uint8_t>& output)
     {
         rgba = thrust::raw_pointer_cast(rgba_input.data());
         depth = thrust::raw_pointer_cast(depth_input.data());
         write_index = thrust::raw_pointer_cast(write_input.data());
         read_index = thrust::raw_pointer_cast(read_input.data());
+        active_pixel_size = thrust::raw_pointer_cast(output_size.data());
         final = thrust::raw_pointer_cast(output.data());
         num_runs = num_runs_input;
         width = width_input;
@@ -153,18 +158,12 @@ struct ActivePixelIceTFinalizeFunctor
     {
         if(thread_id < (num_runs / 2)) //active runs
         {
-            
-            uint32_t read_position = read_index[2 * thread_id + 1];
-
+            int read_first_inactive = (depth[0] == 1.0f) ? 1 : 0;
+            uint32_t read_position = read_index[2 * thread_id + read_first_inactive];
 
             uint32_t write_position = write_index[thread_id] * 8 + (8 * (thread_id + 1));
-            uint32_t num_active = (width * height) - read_position;
-            if(thread_id < ( num_runs / 2 ) - 1)
-            {
-                num_active = read_index[2 * thread_id + 2] - read_position;
-
-            }
-            uint32_t num_inactive = read_position - read_index[2 * thread_id];
+            uint32_t num_active = (thread_id < ( num_runs / 2 ) - 1) ? read_index[2 * thread_id + read_first_inactive + 1] - read_position : (width * height) - read_position;
+            uint32_t num_inactive = (2 * thread_id + read_first_inactive - 1 >= 0) ? read_position - read_index[2 * thread_id + read_first_inactive - 1] : read_position;
             writeUint32(final, write_position - 8, num_inactive);
             writeUint32(final, write_position - 4, num_active);
             for(int i = 0; i < num_active; i++)
@@ -179,6 +178,10 @@ struct ActivePixelIceTFinalizeFunctor
                 final[write_position + 8 * i + 2] = blue;
                 final[write_position + 8 * i + 3] = alpha;
                 memcpy(final + write_position + 8 * i + 4, &depth_pos, 4);
+            }
+            if(thread_id == (num_runs / 2) - 1)
+            {
+                active_pixel_size[0] = write_position + 8 * num_active;
             }
         }
     }
@@ -592,7 +595,8 @@ void initImageConverter(int width, int height)
 
     image_input_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
     depth_input_ptr = new thrust::device_vector<float>(img_w * img_h);
-    image_output_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 4);
+    image_output_ptr = new thrust::device_vector<uint8_t>(img_w * img_h * 8);
+    image_output_size_ptr = new thrust::device_vector<uint32_t>(1);
     runs = new thrust::device_vector<uint8_t>(img_w * img_h);
     run_groups = new thrust::device_vector<uint32_t>(img_w * img_h);
     run_counts = new thrust::device_vector<uint32_t>(img_w * img_h);
@@ -619,7 +623,7 @@ void rgbaToGrayscale(uint8_t *rgba, uint8_t *gray)
     printf("THRUST - Grayscale (%dx%d): %.6lf\n", img_w, img_h, (double)(end - start) / 1000000.0);
 }
 
-void rgbaDepthToActivePixel(uint8_t* rgba, float* depth, uint8_t* active_pixel)
+void rgbaDepthToActivePixel(uint8_t* rgba, float* depth, uint8_t* active_pixel, uint32_t* active_pixel_size)
 {
     thrust::copy(rgba, rgba + (img_w * img_h * 4), image_input_ptr->begin());
     thrust::copy(depth, depth + (img_w * img_h), depth_input_ptr->begin());
@@ -636,17 +640,46 @@ void rgbaDepthToActivePixel(uint8_t* rgba, float* depth, uint8_t* active_pixel)
     thrust::reduce_by_key(thrust::device, run_groups->begin(), run_groups->end(), thrust::make_constant_iterator(1), thrust::discard_iterator<uint32_t>(), run_counts->begin());
     thrust::copy(run_counts->begin(), run_counts->end(), std::ostream_iterator<int>(std::cout, ", "));
     printf("\n\n");
-    strided_range<thrust::device_vector<uint32_t>::iterator> odds(run_counts->begin() + 1, run_counts->end(), 2);
-    thrust::exclusive_scan(thrust::device, odds.begin(), odds.end(), run_actives->begin());
+
+    strided_range<thrust::device_vector<uint32_t>::iterator>* every_other;
+    if(depth[0] != 1.0f)
+    {
+        every_other = new strided_range<thrust::device_vector<uint32_t>::iterator>(run_counts->begin(), run_counts->end(), 2);
+    }
+    else
+    {
+        every_other = new strided_range<thrust::device_vector<uint32_t>::iterator>(run_counts->begin() + 1, run_counts->end(), 2);
+    }
+    thrust::exclusive_scan(thrust::device, every_other->begin(), every_other->end(), run_actives->begin());
+    delete every_other;
     thrust::copy(run_actives->begin(), run_actives->end(), std::ostream_iterator<int>(std::cout, ", "));
+    
+
+    //Need to copy the last number in run_groups into an int, to then pass to ActivePixelIceTFinalizeFunctor on line 666. Add 1 if the last depth is a 1
+
     printf("\n\n");
     thrust::exclusive_scan(thrust::device, run_counts->begin(), run_counts->end(), run_all->begin());
     thrust::copy(run_all->begin(), run_all->end(), std::ostream_iterator<int>(std::cout, ", "));
-
     printf("\n\n");
-
-    thrust::for_each_n(thrust::device, it, 8, ActivePixelIceTFinalizeFunctor(8, 8, 3, *image_input_ptr, *depth_input_ptr, *run_actives, *run_all, *image_output_ptr));
-    thrust::copy(image_output_ptr->begin(), image_output_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
+    uint32_t total_num_runs;
+    float last_depth = depth[img_w * img_h - 1];
+    thrust::copy(run_groups->end() - 1, run_groups->end(), &total_num_runs);
+    if(last_depth == 1.0f)
+    {
+        total_num_runs++;
+    }
+    if(total_num_runs % 2 != 0)
+    {
+        total_num_runs++;
+    }
+    
+    printf("%u\n", total_num_runs);
+    //printf("%d", thrust::raw_pointer_cast(run_actives->end()->data()));
+    //printf("\n\n");
+    //add 0 in front of ActivePixelIceTFinalizeFunctor. Shift it.
+    thrust::for_each_n(thrust::device, it, total_num_runs, ActivePixelIceTFinalizeFunctor(total_num_runs, img_w, img_h, *image_input_ptr, *depth_input_ptr, *run_actives, *run_all, *image_output_size_ptr, *image_output_ptr));
+    thrust::copy(image_output_size_ptr->begin(), image_output_size_ptr->end(), active_pixel_size);
+    thrust::copy(image_output_ptr->begin(), image_output_ptr->begin() + (*active_pixel_size), std::ostream_iterator<int>(std::cout, ", "));
 
     printf("\n\n");
 }

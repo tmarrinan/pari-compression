@@ -50,16 +50,16 @@ int main(int argc, char **argv)
     //set manually for rgba array. 8 * 3 * 4 (or smaller)
     //rgba = new uint8_t[8*3*4];
     uint8_t rgba[96] = {
-        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
         0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255,
-        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255
     };
 
 
     //depth float array
     //depth = new float[8*3];
     float depth[24] = {
-        1.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+        0.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
     };
 
 
@@ -120,7 +120,9 @@ int main(int argc, char **argv)
     initImageConverter(img_w, img_h);
     
     //put my test case here, comment out the rest of the test cases.
-    rgbaDepthToActivePixel(rgba, depth, active_pixels);
+    rgbaDepthToActivePixel(rgba, depth, active_pixels, &size);
+
+    printf("Raw size: %u, compressed size: %u\n", img_w * img_h * 8, size);
 
 
     // convert rgba image to grayscale image
