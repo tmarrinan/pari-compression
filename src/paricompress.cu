@@ -7,6 +7,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
+#include <thrust/transform_scan.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
 #include "paricompress.h"
@@ -27,6 +28,16 @@ __device__ static void extractCGTile4x4(uint32_t offset_x, uint32_t offset_y, co
 
 static uint64_t currentTime();
 
+
+// CUDA Thrust transformer to change data type
+template<typename T1, typename T2>
+struct typecast
+{
+    __host__ __device__ T2 operator()(const T1 &x) const
+    {
+        return static_cast<T2>(x);
+    }
+};
 
 // CUDA Thrust strided range iterator
 template <typename Iterator>
@@ -445,6 +456,8 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uin
     thrust::copy(rgba, rgba + (width * height * 4), input_rgba_ptr->begin());
     thrust::copy(depth, depth + (width * height), input_depth_ptr->begin());
 
+    uint64_t start_compute = currentTime();
+
     // Convert RGBA and Depth buffers to Active Pixel buffer
     thrust::counting_iterator<size_t> it(0);
     //   - whether or not each pixel starts a new run (0 or 1)
@@ -453,7 +466,10 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uin
     //thrust::copy(new_run_ptr->begin(), new_run_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
     //printf("\n\n");
     //   - id for each run
-    thrust::inclusive_scan(thrust::device, new_run_ptr->begin(), new_run_ptr->end(), run_id_ptr->begin());
+    typecast<uint8_t, uint32_t> ubyteToUint;
+    thrust::plus<uint32_t> uintSum;
+    thrust::transform_inclusive_scan(thrust::device, new_run_ptr->begin(), new_run_ptr->end(), run_id_ptr->begin(),
+                                     ubyteToUint, uintSum);
     //thrust::copy(run_id_ptr->begin(), run_id_ptr->end(), std::ostream_iterator<int>(std::cout, ", "));
     //printf("\n\n");
     //   - number of pixels in each run
@@ -490,12 +506,14 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uin
     thrust::for_each_n(thrust::device, it, total_num_runs, PariActivePixelFinalizeFunctor(total_num_runs, width, height, *input_rgba_ptr,
                        *input_depth_ptr, *read_offset_ptr, *write_offset_ptr, *output_ptr, *output_size_ptr));
 
+    uint64_t end_compute = currentTime();
+
     // Copy image data back to host
     thrust::copy(output_size_ptr->begin(), output_size_ptr->end(), active_pixel_size);
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
 
     uint64_t end = currentTime();
-    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 // OpenGL - PARI functions

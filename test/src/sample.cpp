@@ -37,6 +37,7 @@ typedef struct DdsHeader {
 
 void createDdsHeader(int width, int height, DdsHeader *header);
 void readPpm(const char *filename, int *width, int *height, uint8_t **pixels);
+void readDepth(const char *filename, int width, int height, float **depth);
 void savePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void savePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void saveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
@@ -127,6 +128,12 @@ int main(int argc, char **argv)
         saveDds("pari_result_dxt1.dds", img_w, img_h, dxt1);
 
         // TEST - active pixel encoding
+        int ap_width, ap_height;
+        uint8_t *ap_rgba;
+        float *ap_depth;
+        readPpm("resrc/neurons.ppm", &ap_width, &ap_height, &ap_rgba);
+        readDepth("resrc/neurons.depth", ap_width, ap_height, &ap_depth);
+        /*
         int ap_width = 8;
         int ap_height = 3;
         uint8_t ap_rgba[96] = {
@@ -137,6 +144,7 @@ int main(int argc, char **argv)
         float ap_depth[24] = {
             0.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
         };
+        */
         uint8_t* active_pixels = new uint8_t[ap_width * ap_height * 8 + 8];
         uint32_t ap_size;
 
@@ -147,12 +155,36 @@ int main(int argc, char **argv)
         pariRgbaBufferToActivePixel(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
                                     activepixel_gpu_buffer, active_pixels, &ap_size);
 
-        printf("Active Pixel Buffer (%u bytes):\n", ap_size);
-        for (int i = 0; i < ap_size; i++)
+        uint32_t num_inactive = 0;
+        uint32_t num_active = 0;
+        for (int i = 0; i < ap_width * ap_height; i++)
         {
-            printf(" %u", active_pixels[i]);
+            if (ap_depth[i] == 1.0f) num_inactive++;
+            else num_active++;
+
         }
-        printf("\n");
+        printf("active: %u, inactive: %u\n", num_active, num_inactive);
+        printf("Active Pixel Buffer (%u bytes):\n", ap_size);
+        //for (int i = 0; i < ap_size; i++)
+        //{
+        //    printf(" %u", active_pixels[i]);
+        //}
+        //printf("\n");
+        printf("compression: %.3lf\n", 100.0 * (double)ap_size / (double)(ap_width * ap_height * 8));
+
+        /*
+        Active Pixel Header Info:
+          - 7 (4-byte) ints
+            - ICET_IMAGE_MAGIC_NUM_INDEX              0   ==>  ICET_IMAGE_MAGIC_NUM
+            - ICET_IMAGE_COLOR_FORMAT_INDEX           1   ==>  ICET_IMAGE_COLOR_RGBA_UBYTE
+            - ICET_IMAGE_DEPTH_FORMAT_INDEX           2   ==>  ICET_IMAGE_DEPTH_FLOAT
+            - ICET_IMAGE_WIDTH_INDEX                  3   ==>  image width
+            - ICET_IMAGE_HEIGHT_INDEX                 4   ==>  image height
+            - ICET_IMAGE_MAX_NUM_PIXELS_INDEX         5   ==>  image width * image height
+            - ICET_IMAGE_ACTUAL_BUFFER_SIZE_INDEX     6   ==>  header size + data size (i.e. (ICET_IMAGE_DATA_START_INDEX * sieof(IceTUInt)) +
+                                                                                        (width * height * (pixel color size + pixel depth size)))
+            - ICET_IMAGE_DATA_START_INDEX             7   ==>  actual compressed image data
+        */
     }
 
     return 0;
@@ -218,6 +250,21 @@ void readPpm(const char *filename, int *width, int *height, uint8_t **pixels)
     else
     {
         *pixels = NULL;
+    }
+}
+
+void readDepth(const char *filename, int width, int height, float **depth)
+{
+    std::ifstream file(filename, std::ios::binary);
+    if (file.is_open())
+    {
+        char *tmp_char = new char[width * height * sizeof(float)];
+        file.read(tmp_char, width * height * sizeof(float));
+        *depth = reinterpret_cast<float*>(tmp_char);
+    }
+    else
+    {
+        *depth = NULL;
     }
 }
 
