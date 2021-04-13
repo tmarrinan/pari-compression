@@ -128,11 +128,13 @@ int main(int argc, char **argv)
         saveDds("pari_result_dxt1.dds", img_w, img_h, dxt1);
 
         // TEST - active pixel encoding
+        
         int ap_width, ap_height;
         uint8_t *ap_rgba;
         float *ap_depth;
         readPpm("resrc/neurons.ppm", &ap_width, &ap_height, &ap_rgba);
         readDepth("resrc/neurons.depth", ap_width, ap_height, &ap_depth);
+        
         /*
         int ap_width = 8;
         int ap_height = 3;
@@ -142,18 +144,24 @@ int main(int argc, char **argv)
             0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255
         };
         float ap_depth[24] = {
-            0.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
+            1.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
         };
         */
+        
         uint8_t* active_pixels = new uint8_t[ap_width * ap_height * 8 + 8];
+        uint8_t* active_pixels2 = new uint8_t[ap_width * ap_height * 8 + 8];
         uint32_t ap_size;
+        uint32_t ap_size2;
 
         PariGpuBuffer ap_rgba_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Rgba);
         PariGpuBuffer ap_depth_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Depth);
         PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::ActivePixel);
+        PariGpuBuffer activepixel2_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::ActivePixel2);
 
         pariRgbaBufferToActivePixel(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
                                     activepixel_gpu_buffer, active_pixels, &ap_size);
+        pariRgbaBufferToActivePixel2(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
+                                     activepixel2_gpu_buffer, active_pixels2, &ap_size2);
 
         uint32_t num_inactive = 0;
         uint32_t num_active = 0;
@@ -171,6 +179,9 @@ int main(int argc, char **argv)
         //}
         //printf("\n");
         printf("compression: %.3lf\n", 100.0 * (double)ap_size / (double)(ap_width * ap_height * 8));
+
+        printf("Active Pixel 2 Buffer (%u bytes):\n", ap_size2);
+        printf("compression: %.3lf\n", 100.0 * (double)ap_size2 / (double)(ap_width * ap_height * 8));
 
         /*
         Active Pixel Header Info:

@@ -232,20 +232,10 @@ struct PariActivePixelFinalizeFunctor
             uint32_t num_inactive = (2 * thread_id + read_first_inactive - 1 >= 0) ?
                                     read_position - read_index[2 * thread_id + read_first_inactive - 1] :
                                     read_position;
-            //writeUint32(compressed, write_position - 8, num_inactive);
-            //writeUint32(compressed, write_position - 4, num_active);
             memcpy(compressed + write_position - 8, &num_inactive, 4);
             memcpy(compressed + write_position - 4, &num_active, 4);
             for (int i = 0; i < num_active; i++)
             {
-                //uint8_t red = rgba[4 * (read_position + i)];
-                //uint8_t green = rgba[4 * (read_position + i) + 1];
-                //uint8_t blue = rgba[4 * (read_position + i) + 2];
-                //uint8_t alpha = rgba[4 * (read_position + i) + 3];
-                //compressed[write_position + 8 * i] = red;
-                //compressed[write_position + 8 * i + 1] = green;
-                //compressed[write_position + 8 * i + 2] = blue;
-                //compressed[write_position + 8 * i + 3] = alpha;
                 const uint8_t *color_at_pos = rgba + (4 * (read_position + i));
                 memcpy(compressed + write_position + 8 * i, color_at_pos, 4);
                 const float *depth_at_pos = depth + (read_position + i);
@@ -254,6 +244,104 @@ struct PariActivePixelFinalizeFunctor
             if (thread_id == (num_runs / 2) - 1)
             {
                 compressed_size[0] = write_position + 8 * num_active;
+            }
+        }
+    }
+};
+
+struct PariActivePixel2Functor
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint8_t* new_run;
+    uint8_t* is_active;
+    int width;
+    int height;
+    float max_depth;
+    PariActivePixel2Functor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input,
+                           thrust::device_vector<float> const& depth_input, thrust::device_vector<uint8_t>& new_run_output,
+                           thrust::device_vector<uint8_t>& is_active_output)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        new_run = thrust::raw_pointer_cast(new_run_output.data());
+        is_active = thrust::raw_pointer_cast(is_active_output.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __host__ __device__ void operator()(int thread_id)
+    {
+        if (thread_id < width * height)
+        {
+            // whether or not pixel starts a new run
+            new_run[thread_id] = (thread_id == 0 || (depth[thread_id] != max_depth && depth[thread_id - 1] == max_depth) ||
+                                 (depth[thread_id] == max_depth && depth[thread_id - 1] != max_depth)) ?
+                                 1 :
+                                 0;
+            // whether or not pixel is active
+            is_active[thread_id] = (depth[thread_id] == max_depth) ? 0 : 1;
+        }
+    }
+};
+
+struct PariActivePixel2FinalizeFunctor
+{
+    const uint8_t* rgba;
+    const float* depth;
+    uint8_t* new_run;
+    uint32_t* run_index;
+    uint32_t* run_length;
+    uint32_t* active_index;
+    int width;
+    int height;
+    uint8_t* compressed;
+    uint32_t* compressed_size;
+    float max_depth;
+    PariActivePixel2FinalizeFunctor(int width_input, int height_input, thrust::device_vector<uint8_t> const& rgba_input,
+                                   thrust::device_vector<float> const& depth_input, thrust::device_vector<uint8_t>& new_run_input,
+                                   thrust::device_vector<uint32_t>& run_idx_input, thrust::device_vector<uint32_t>& run_length_input,
+                                   thrust::device_vector<uint32_t>& active_idx_input, thrust::device_vector<uint8_t>& output,
+                                   thrust::device_vector<uint32_t>& output_size)
+    {
+        rgba = thrust::raw_pointer_cast(rgba_input.data());
+        depth = thrust::raw_pointer_cast(depth_input.data());
+        new_run = thrust::raw_pointer_cast(new_run_input.data());
+        run_index = thrust::raw_pointer_cast(run_idx_input.data());
+        run_length = thrust::raw_pointer_cast(run_length_input.data());
+        active_index = thrust::raw_pointer_cast(active_idx_input.data());
+        compressed = thrust::raw_pointer_cast(output.data());
+        compressed_size = thrust::raw_pointer_cast(output_size.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __host__ __device__ void operator()(int thread_id)
+    {
+        if(thread_id < width * height && depth[thread_id] != max_depth) // active pixels only
+        {
+            uint32_t write_pos = (active_index[thread_id] * 8) + (((run_index[thread_id] + 1) / 2) * 8);
+            memcpy(compressed + write_pos, rgba + (4 * thread_id), 4);
+            memcpy(compressed + write_pos + 4, depth + thread_id, 4);
+            if (new_run[thread_id] == 1)
+            {
+                uint32_t num_inactive = (run_index[thread_id] > 1) ? run_length[run_index[thread_id] - 2] : 0;
+                uint32_t num_active = run_length[run_index[thread_id] - 1];
+                memcpy(compressed + write_pos - 8, &num_inactive, 4);
+                memcpy(compressed + write_pos - 4, &num_active, 4);
+            }
+        }
+        if (thread_id == (width * height) - 1) // final pixel - write compressed size
+        {
+            uint32_t run_index_offset = (depth[thread_id] == max_depth) ? 0 : 1;
+            uint32_t write_pos = (active_index[thread_id] * 8) + (((run_index[thread_id] + run_index_offset) / 2) * 8);
+            compressed_size[0] = write_pos + 8;
+            if (depth[thread_id] == max_depth)
+            {
+                uint32_t num_inactive = run_length[run_index[thread_id] - 1];
+                uint32_t num_active = 0;
+                memcpy(compressed + write_pos, &num_inactive, 4);
+                memcpy(compressed + write_pos + 4, &num_active, 4);
             }
         }
     }
@@ -377,6 +465,16 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
             buffers[2] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // number of pixels in each run (reduce_by_key of buffers[1])
             buffers[3] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // offset in original image where each run starts (exclusive scan of buffers[2])
             buffers[4] = (void*)(new thrust::device_vector<uint32_t>(width * height / 2));    // offset in compressed image where each run starts (exclusive scan of odd indices in buffers[2])
+            buffers[5] = (void*)(new thrust::device_vector<uint8_t>(width * height * 8 + 8)); // final compressed image
+            buffers[6] = (void*)(new thrust::device_vector<uint32_t>(1));                     // size in bytes of final compressed image
+            break;
+        case PariCompressionType::ActivePixel2:
+            buffers = (PariGpuBuffer)malloc(7 * sizeof(void*));
+            buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel starts a new run (0 or 1)
+            buffers[1] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel is active (0 or 1)
+            buffers[2] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // id for each run (inclusive scan of buffers[0])
+            buffers[3] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // number of pixels in each run (reduce_by_key of buffers[2])
+            buffers[4] = (void*)(new thrust::device_vector<uint32_t>(width * height));        // number of active pixels prior to each pixel (exclusive scan of buffers[1])
             buffers[5] = (void*)(new thrust::device_vector<uint8_t>(width * height * 8 + 8)); // final compressed image
             buffers[6] = (void*)(new thrust::device_vector<uint32_t>(1));                     // size in bytes of final compressed image
             break;
@@ -505,6 +603,59 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uin
     //   - finalize compressed active pixel image
     thrust::for_each_n(thrust::device, it, total_num_runs, PariActivePixelFinalizeFunctor(total_num_runs, width, height, *input_rgba_ptr,
                        *input_depth_ptr, *read_offset_ptr, *write_offset_ptr, *output_ptr, *output_size_ptr));
+
+    uint64_t end_compute = currentTime();
+
+    // Copy image data back to host
+    thrust::copy(output_size_ptr->begin(), output_size_ptr->end(), active_pixel_size);
+    thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
+}
+
+PARI_DLLEXPORT void pariRgbaBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                 PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                 PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
+{
+    uint64_t start = currentTime();
+
+    // Get handles to input and output image pointers
+    thrust::device_vector<uint8_t> *input_rgba_ptr = (thrust::device_vector<uint8_t>*)(gpu_rgba_in_buf[0]);
+    thrust::device_vector<float> *input_depth_ptr = (thrust::device_vector<float>*)(gpu_depth_in_buf[0]);
+    thrust::device_vector<uint8_t> *new_run_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[0]);
+    thrust::device_vector<uint8_t> *is_active_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[1]);
+    thrust::device_vector<uint32_t> *run_id_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[2]);
+    thrust::device_vector<uint32_t> *run_counts_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[3]);
+    thrust::device_vector<uint32_t> *active_idx_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[4]);
+    thrust::device_vector<uint8_t> *output_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[5]);
+    thrust::device_vector<uint32_t> *output_size_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[6]);
+
+    // Upload RGBA and Depth buffers to GPU
+    thrust::copy(rgba, rgba + (width * height * 4), input_rgba_ptr->begin());
+    thrust::copy(depth, depth + (width * height), input_depth_ptr->begin());
+
+    uint64_t start_compute = currentTime();
+
+    // Convert RGBA and Depth buffers to Active Pixel buffer
+    thrust::counting_iterator<size_t> it(0);
+    typecast<uint8_t, uint32_t> ubyteToUint;
+    thrust::plus<uint32_t> uintSum;
+    //   - whether or not each pixel starts a new run (0 or 1) and whether or not each pixel is active (0 or 1)
+    thrust::for_each_n(thrust::device, it, width * height, PariActivePixel2Functor(width, height, *input_rgba_ptr,
+                       *input_depth_ptr, *new_run_ptr, *is_active_ptr));
+    //   - id for each run
+    thrust::transform_inclusive_scan(thrust::device, new_run_ptr->begin(), new_run_ptr->end(), run_id_ptr->begin(),
+                                     ubyteToUint, uintSum);
+    //   - number of pixels in each run
+    thrust::reduce_by_key(thrust::device, run_id_ptr->begin(), run_id_ptr->end(), thrust::make_constant_iterator(1),
+                          thrust::discard_iterator<uint32_t>(), run_counts_ptr->begin());
+    //   - number of active pixels prior to each pixel
+    thrust::transform_exclusive_scan(thrust::device, is_active_ptr->begin(), is_active_ptr->end(), active_idx_ptr->begin(),
+                                     ubyteToUint, 0, uintSum);
+    //   -  finalize compressed active pixel image
+    thrust::for_each_n(thrust::device, it, width * height, PariActivePixel2FinalizeFunctor(width, height, *input_rgba_ptr,
+                       *input_depth_ptr, *new_run_ptr, *run_id_ptr, *run_counts_ptr, *active_idx_ptr, *output_ptr, *output_size_ptr));
 
     uint64_t end_compute = currentTime();
 
