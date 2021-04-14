@@ -664,7 +664,7 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel2(uint8_t *rgba, float *depth, ui
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
 
     uint64_t end = currentTime();
-    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
+    printf("PARI> pariRgbaBufferToActivePixel2 (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 // OpenGL - PARI functions

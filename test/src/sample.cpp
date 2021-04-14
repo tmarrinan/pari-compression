@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <fstream>
+#include <chrono>
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 #include "paricompress.h"
@@ -41,6 +42,8 @@ void readDepth(const char *filename, int width, int height, float **depth);
 void savePpm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void savePgm(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
 void saveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pixels);
+uint32_t rgbaDepthToActivePixelCPU(int width, int height, uint8_t* rgba, float* depth, uint8_t* result);
+uint64_t currentTime();
 
 int main(int argc, char **argv)
 {
@@ -150,8 +153,10 @@ int main(int argc, char **argv)
         
         uint8_t* active_pixels = new uint8_t[ap_width * ap_height * 8 + 8];
         uint8_t* active_pixels2 = new uint8_t[ap_width * ap_height * 8 + 8];
+        uint8_t* active_pixels_cpu = new uint8_t[ap_width * ap_height * 8 + 8];
         uint32_t ap_size;
         uint32_t ap_size2;
+        uint32_t ap_size_cpu;
 
         PariGpuBuffer ap_rgba_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Rgba);
         PariGpuBuffer ap_depth_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Depth);
@@ -183,6 +188,31 @@ int main(int argc, char **argv)
         printf("Active Pixel 2 Buffer (%u bytes):\n", ap_size2);
         printf("compression: %.3lf\n", 100.0 * (double)ap_size2 / (double)(ap_width * ap_height * 8));
 
+        ap_size_cpu = rgbaDepthToActivePixelCPU(ap_width, ap_height, ap_rgba, ap_depth, active_pixels_cpu);
+        printf("Active Pixel CPU Buffer (%u bytes):\n", ap_size_cpu);
+        printf("compression: %.3lf\n", 100.0 * (double)ap_size_cpu / (double)(ap_width * ap_height * 8));
+
+        if (ap_size == ap_size2 && ap_size == ap_size_cpu)
+        {
+            int i;
+            bool all_same = true;
+            for (i = 0; i < ap_size; i++)
+            {
+                if (active_pixels[i] != active_pixels2[i] || active_pixels[i] != active_pixels_cpu[i])
+                {
+                    printf("different data at position %d\n", i);
+                    all_same = false;
+                }
+            }
+            if (all_same)
+            {
+                printf("all 3 algorithms result in same data!\n");
+            }
+        }
+        else
+        {
+            printf("sizes do not match\n");
+        }
         /*
         Active Pixel Header Info:
           - 7 (4-byte) ints
@@ -304,4 +334,64 @@ void saveDds(const char *filename, uint32_t width, uint32_t height, uint8_t *pix
     fwrite(&header, sizeof(DdsHeader), 1, fp);
     fwrite(pixels, width * height / 2, 1, fp);
     fclose(fp);
+}
+
+/****************************************************************************************/
+uint32_t rgbaDepthToActivePixelCPU(int width, int height, uint8_t* rgba, float* depth, uint8_t* result)
+{
+    uint64_t start = currentTime();
+
+    int i;
+    uint32_t inactive = 0;
+    uint32_t active = 0;
+    uint32_t run_start_index = 0;
+    float max_depth = 1.0f;
+    bool active_run = false;
+    for (i = 0; i < width * height; i++)
+    {
+        // end of existing active run, start of new inactive run
+        if (depth[i] == max_depth && active_run)
+        {
+            active_run = false;
+            memcpy(result + run_start_index, &inactive, 4);
+            memcpy(result + run_start_index + 4, &active, 4);
+            run_start_index = run_start_index + (8 * active) + 8;
+            inactive = 1;
+            active = 0;
+        }
+        // end of existing inactive run, start of new active run
+        else if (depth[i] != max_depth && !active_run)
+        {
+            active_run = true;
+            memcpy(result + run_start_index + (8 * active) + 8, rgba + 4 * i, 4);
+            memcpy(result + run_start_index + (8 * active) + 12, depth + i, 4);
+            active += 1;
+        }
+        // continuation of existing inactive run
+        else if (depth[i] == max_depth && !active_run)
+        {
+            inactive += 1;
+        }
+        // continuation of existing active run
+        else if (depth[i] != max_depth && active_run)
+        {
+            memcpy(result + run_start_index + (8 * active) + 8, rgba + 4 * i, 4);
+            memcpy(result + run_start_index + (8 * active) + 12, depth + i, 4);
+            active = active + 1;
+        }
+    }
+    memcpy(result + run_start_index, &inactive, 4);
+    memcpy(result + run_start_index + 4, &active, 4);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariRgbaBufferToActivePixelCPU (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+
+    return run_start_index + 8 * active + 8;
+}
+
+uint64_t currentTime()
+{
+    uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::system_clock::now().time_since_epoch()).count();
+    return us;
 }
