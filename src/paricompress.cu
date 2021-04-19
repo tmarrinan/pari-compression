@@ -412,6 +412,116 @@ struct PariCGDxt1Functor
     }
 };
 
+struct PariCGActivePixelFunctor
+{
+    cudaSurfaceObject_t depth;
+    uint8_t* new_run;
+    uint8_t* is_active;
+    int width;
+    int height;
+    float max_depth;
+    PariCGActivePixelFunctor(cudaSurfaceObject_t const& depth_input, thrust::device_vector<uint8_t>& new_run_output,
+                             thrust::device_vector<uint8_t>& is_active_output, int width_input, int height_input)
+    {
+        depth = depth_input;
+        new_run = thrust::raw_pointer_cast(new_run_output.data());
+        is_active = thrust::raw_pointer_cast(is_active_output.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __device__ void operator()(int thread_id)
+    {
+        if (thread_id < width * height)
+        {
+            float px_depth;
+            float prev_depth = 0.0f;
+            surf2Dread(&px_depth, depth, 4 * (thread_id % width), thread_id / width);
+            if (thread_id > 0)
+            {
+                surf2Dread(&prev_depth, depth, 4 * ((thread_id - 1) % width), (thread_id - 1) / width);
+            } 
+
+            // whether or not pixel starts a new run
+            new_run[thread_id] = (thread_id == 0 || (px_depth != max_depth && prev_depth == max_depth) ||
+                                 (px_depth == max_depth && prev_depth != max_depth)) ?
+                                 1 :
+                                 0;
+            // whether or not pixel is active
+            is_active[thread_id] = (px_depth == max_depth) ? 0 : 1;
+        }
+    }
+};
+
+struct PariCGActivePixelFinalizeFunctor
+{
+    cudaSurfaceObject_t rgba;
+    cudaSurfaceObject_t depth;
+    uint8_t* new_run;
+    uint32_t* run_index;
+    uint32_t* run_length;
+    uint32_t* active_index;
+    int width;
+    int height;
+    uint8_t* compressed;
+    uint32_t* compressed_size;
+    float max_depth;
+    PariCGActivePixelFinalizeFunctor(cudaSurfaceObject_t const& rgba_input, cudaSurfaceObject_t const& depth_input,
+                                     thrust::device_vector<uint8_t>& new_run_input, thrust::device_vector<uint32_t>& run_idx_input,
+                                     thrust::device_vector<uint32_t>& run_length_input, thrust::device_vector<uint32_t>& active_idx_input,
+                                     thrust::device_vector<uint8_t>& output, thrust::device_vector<uint32_t>& output_size,
+                                     int width_input, int height_input)
+    {
+        rgba = rgba_input;
+        depth = depth_input;
+        new_run = thrust::raw_pointer_cast(new_run_input.data());
+        run_index = thrust::raw_pointer_cast(run_idx_input.data());
+        run_length = thrust::raw_pointer_cast(run_length_input.data());
+        active_index = thrust::raw_pointer_cast(active_idx_input.data());
+        compressed = thrust::raw_pointer_cast(output.data());
+        compressed_size = thrust::raw_pointer_cast(output_size.data());
+        width = width_input;
+        height = height_input;
+        max_depth = 1.0f;
+    }
+    __device__ void operator()(int thread_id)
+    {
+        if (thread_id < width * height)
+        {
+            float px_depth;
+            surf2Dread(&px_depth, depth, 4 * (thread_id % width), thread_id / width);
+            if (px_depth != max_depth) // active pixels only
+            {
+                uchar4 px_color;
+                surf2Dread(&px_color, rgba, 4 * (thread_id % width), thread_id / width);
+                uint32_t write_pos = (active_index[thread_id] * 8) + (((run_index[thread_id] + 1) / 2) * 8);
+                memcpy(compressed + write_pos, &px_color, 4);
+                memcpy(compressed + write_pos + 4, &px_depth, 4);
+                if (new_run[thread_id] == 1)
+                {
+                    uint32_t num_inactive = (run_index[thread_id] > 1) ? run_length[run_index[thread_id] - 2] : 0;
+                    uint32_t num_active = run_length[run_index[thread_id] - 1];
+                    memcpy(compressed + write_pos - 8, &num_inactive, 4);
+                    memcpy(compressed + write_pos - 4, &num_active, 4);
+                }
+            }
+            if (thread_id == (width * height) - 1) // final pixel - write compressed size
+            {
+                uint32_t run_index_offset = (px_depth == max_depth) ? 0 : 1;
+                uint32_t write_pos = (active_index[thread_id] * 8) + (((run_index[thread_id] + run_index_offset) / 2) * 8);
+                compressed_size[0] = write_pos + 8;
+                if (px_depth == max_depth)
+                {
+                    uint32_t num_inactive = run_length[run_index[thread_id] - 1];
+                    uint32_t num_active = 0;
+                    memcpy(compressed + write_pos, &num_inactive, 4);
+                    memcpy(compressed + write_pos + 4, &num_active, 4);
+                }
+            }
+        }
+    }
+};
+
 
 // Standard PARI functions
 PARI_DLLEXPORT void pariSetGpuDevice(int device)
@@ -533,9 +643,9 @@ PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t
     printf("PARI> pariRgbaBufferToDxt1 (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 }
 
-PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
-                                                PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
+PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                     PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                     PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
 {
     uint64_t start = currentTime();
 
@@ -611,12 +721,12 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uin
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
 
     uint64_t end = currentTime();
-    printf("PARI> pariRgbaBufferToActivePixel (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
+    printf("PARI> pariRgbaDepthBufferToActivePixel (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
-PARI_DLLEXPORT void pariRgbaBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
-                                                 PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                 PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
+PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                      PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                      PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size)
 {
     uint64_t start = currentTime();
 
@@ -664,7 +774,7 @@ PARI_DLLEXPORT void pariRgbaBufferToActivePixel2(uint8_t *rgba, float *depth, ui
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
 
     uint64_t end = currentTime();
-    printf("PARI> pariRgbaBufferToActivePixel2 (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
+    printf("PARI> pariRgbaDepthBufferToActivePixel2 (%dx%d): %.6lf (%.6lf compute)\n", width, height, (double)(end - start) / 1000000.0, (double)(end_compute - start_compute) / 1000000.0);
 }
 
 // OpenGL - PARI functions
@@ -673,7 +783,12 @@ PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResource
     struct cudaGraphicsResource *cuda_resource;
     struct cudaResourceDesc **description_ptr = (struct cudaResourceDesc **)resrc_description_ptr;
     
-    cudaGraphicsGLRegisterImage(&cuda_resource, texture, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore);
+    // NOTE: GL_DEPTH_COMPONENT not supported - only the following:
+    //  - GL_RED, GL_RG, GL_RGBA, GL_LUMINANCE, GL_ALPHA, GL_LUMINANCE_ALPHA, GL_INTENSITY
+    //  - {GL_R, GL_RG, GL_RGBA} X {8, 16, 16F, 32F, 8UI, 16UI, 32UI, 8I, 16I, 32I}
+    //  - {GL_LUMINANCE, GL_ALPHA, GL_LUMINANCE_ALPHA, GL_INTENSITY} X {8, 16, 16F_ARB, 32F_ARB, 8UI_EXT, 16UI_EXT, 32UI_EXT, 8I_EXT, 16I_EXT, 32I_EXT}
+    cudaError_t err = cudaGraphicsGLRegisterImage(&cuda_resource, texture, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore);
+    printf("cudaGraphicsGLRegisterImage - %s: %s\n", cudaGetErrorName(err), cudaGetErrorString(err));
     
     *description_ptr = new struct cudaResourceDesc();
     memset(*description_ptr, 0, sizeof(struct cudaResourceDesc));
@@ -756,6 +871,72 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
 
     uint64_t end = currentTime();
     printf("PARI> pariGetRgbaTextureAsDxt1 (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+}
+
+PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
+                                                         uint32_t texture_color, PariCGResource cg_resource_depth,
+                                                         PariCGResourceDescription resrc_description_depth, uint32_t texture_depth,
+                                                         PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, uint8_t *active_pixel,
+                                                         uint32_t *active_pixel_size)
+{
+    cudaDeviceSynchronize(); // wait for OpenGL commands to finish and GPU to become available
+
+    uint64_t start = currentTime();
+
+    cudaArray *array_color;
+    cudaArray *array_depth;
+    cudaSurfaceObject_t target_color;
+    cudaSurfaceObject_t target_depth;
+
+    // Get handles to output image pointers as well as cuda resources and their descriptions
+    thrust::device_vector<uint8_t> *new_run_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[0]);
+    thrust::device_vector<uint8_t> *is_active_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[1]);
+    thrust::device_vector<uint32_t> *run_id_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[2]);
+    thrust::device_vector<uint32_t> *run_counts_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[3]);
+    thrust::device_vector<uint32_t> *active_idx_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[4]);
+    thrust::device_vector<uint8_t> *output_ptr = (thrust::device_vector<uint8_t>*)(gpu_out_buf[5]);
+    thrust::device_vector<uint32_t> *output_size_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[6]);
+    struct cudaGraphicsResource *cuda_resource_color = (struct cudaGraphicsResource *)cg_resource_color;
+    struct cudaGraphicsResource *cuda_resource_depth = (struct cudaGraphicsResource *)cg_resource_depth;
+    struct cudaResourceDesc description_color = *(struct cudaResourceDesc *)resrc_description_color;
+    struct cudaResourceDesc description_depth = *(struct cudaResourceDesc *)resrc_description_depth;
+
+    // Enable CUDA to access OpenGL texture
+    cudaGraphicsMapResources(1, &cuda_resource_color, 0);
+    cudaGraphicsMapResources(1, &cuda_resource_depth, 0);
+    cudaGraphicsSubResourceGetMappedArray(&array_color, cuda_resource_color, 0, 0);
+    cudaGraphicsSubResourceGetMappedArray(&array_depth, cuda_resource_depth, 0, 0);
+    description_color.res.array.array = array_color;
+    description_depth.res.array.array = array_depth;
+    cudaCreateSurfaceObject(&target_color, &description_color);
+    cudaCreateSurfaceObject(&target_depth, &description_depth);
+
+    // Convert RGBA and Depth buffers to Active Pixel buffer
+    thrust::counting_iterator<size_t> it(0);
+    typecast<uint8_t, uint32_t> ubyteToUint;
+    thrust::plus<uint32_t> uintSum;
+    //   - whether or not each pixel starts a new run (0 or 1) and whether or not each pixel is active (0 or 1)
+    thrust::for_each_n(thrust::device, it, width * height, PariCGActivePixelFunctor(target_depth, *new_run_ptr,
+                       *is_active_ptr, width, height));
+    //   - id for each run
+    thrust::transform_inclusive_scan(thrust::device, new_run_ptr->begin(), new_run_ptr->end(), run_id_ptr->begin(),
+                                     ubyteToUint, uintSum);
+    //   - number of pixels in each run
+    thrust::reduce_by_key(thrust::device, run_id_ptr->begin(), run_id_ptr->end(), thrust::make_constant_iterator(1),
+                          thrust::discard_iterator<uint32_t>(), run_counts_ptr->begin());
+    //   - number of active pixels prior to each pixel
+    thrust::transform_exclusive_scan(thrust::device, is_active_ptr->begin(), is_active_ptr->end(), active_idx_ptr->begin(),
+                                     ubyteToUint, 0, uintSum);
+    //   -  finalize compressed active pixel image
+    thrust::for_each_n(thrust::device, it, width * height, PariCGActivePixelFinalizeFunctor(target_color, target_depth,
+                       *new_run_ptr, *run_id_ptr, *run_counts_ptr, *active_idx_ptr, *output_ptr, *output_size_ptr, width, height));
+
+    // Copy image data back to host
+    thrust::copy(output_size_ptr->begin(), output_size_ptr->end(), active_pixel_size);
+    thrust::copy(output_ptr->begin(), output_ptr->begin() + (*active_pixel_size), active_pixel);
+
+    uint64_t end = currentTime();
+    printf("PARI> pariGetRgbaDepthTextureAsActivePixel (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 }
 
 

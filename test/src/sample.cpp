@@ -57,8 +57,8 @@ int main(int argc, char **argv)
         }
 
         // Create a window and its OpenGL context
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         GLFWwindow *window = glfwCreateWindow(320, 180, "PARI-Compress Sample", NULL, NULL);
@@ -73,12 +73,14 @@ int main(int argc, char **argv)
         // Read input rgba image (ppm file)
         int img_w, img_h;
         uint8_t *rgba;
-        readPpm("resrc/airplane_4k.ppm", &img_w, &img_h, &rgba);
+        float *depth;
+        readPpm("resrc/nuclear_station.ppm", &img_w, &img_h, &rgba);
+        readDepth("resrc/nuclear_station.depth", img_w, img_h, &depth);
 
         // Create OpenGL texture and upload rgba image
-        GLuint texture;
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
+        GLuint tex_color;
+        glGenTextures(1, &tex_color);
+        glBindTexture(GL_TEXTURE_2D, tex_color);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -86,25 +88,81 @@ int main(int argc, char **argv)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img_w, img_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        // Create OpenGL texture and upload depth image
+        GLuint tex_depth;
+        glGenTextures(1, &tex_depth);
+        glBindTexture(GL_TEXTURE_2D, tex_depth);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, img_w, img_h, 0, GL_RED, GL_FLOAT, depth);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         glFinish();
 
-        // Register image and get description
-        PariCGResourceDescription description;
-        PariCGResource resource = pariRegisterImage(texture, &description);
+        // Register images and get descriptions
+        PariCGResourceDescription description_color;
+        PariCGResourceDescription description_depth;
+        PariCGResource resource_color = pariRegisterImage(tex_color, &description_color);
+        PariCGResource resource_depth = pariRegisterImage(tex_depth, &description_depth);
 
         // Allocate output images (CPU and GPU)
         uint8_t *gray = new uint8_t[img_w * img_h];
         uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
+        uint8_t* active_pixels = new uint8_t[img_w * img_h * 8 + 8];
+        uint8_t* active_pixels_cpu = new uint8_t[img_w * img_h * 8 + 8];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
         PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
+        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel2); 
 
-        // Convert rgba to grayscale and dxt1
-        pariGetRgbaTextureAsGrayscale(resource, description, texture, gray_gpu_buffer, img_w, img_h, gray);
-        pariGetRgbaTextureAsDxt1(resource, description, texture, dxt1_gpu_buffer, img_w, img_h, dxt1);
+        // Convert rgba to grayscale, dxt1, and active pixel
+        uint32_t ap_size;
+        pariGetRgbaTextureAsGrayscale(resource_color, description_color, tex_color, gray_gpu_buffer, img_w, img_h, gray);
+        pariGetRgbaTextureAsDxt1(resource_color, description_color, tex_color, dxt1_gpu_buffer, img_w, img_h, dxt1);
+        pariGetRgbaDepthTextureAsActivePixel(resource_color, description_color, tex_color, resource_depth, description_depth,
+                                             tex_depth, activepixel_gpu_buffer, img_w, img_h, active_pixels, &ap_size);
 
-        // Save results as pgm and dds files
+        // Save grayscale result as pgm file
         savePgm("pari_result_cg_gray.pgm", img_w, img_h, gray);
+        // Save dxt1 result as dds file
         saveDds("pari_result_cg_dxt1.dds", img_w, img_h, dxt1);
+
+        // Print stats from active pixel result
+        uint32_t num_inactive = 0;
+        uint32_t num_active = 0;
+        for (int i = 0; i < img_w * img_h; i++)
+        {
+            if (depth[i] == 1.0f) num_inactive++;
+            else num_active++;
+        }
+        printf("Active Pixel compression:\n");
+        printf(" active: %u, inactive: %u\n", num_active, num_inactive);
+        printf(" compressed size: %u bytes:\n", ap_size);
+        printf(" compression: %.3lf\n", 100.0 * (double)ap_size / (double)(img_w * img_h * 8));
+
+        uint32_t ap_size_cpu = rgbaDepthToActivePixelCPU(img_w, img_h, rgba, depth, active_pixels_cpu);
+        if (ap_size == ap_size_cpu)
+        {
+            int i;
+            bool all_same = true;
+            for (i = 0; i < ap_size; i++)
+            {
+                if (active_pixels[i] != active_pixels_cpu[i])
+                {
+                    printf(" GPU / CPU different data at position %d\n", i);
+                    all_same = false;
+                }
+            }
+            if (all_same)
+            {
+                printf(" all GPU / CPU result in same data!\n");
+            }
+        }
+        else
+        {
+            printf(" GPU/CPU compressed sizes do not match\n");
+        }
     }
     else
     {
@@ -113,105 +171,67 @@ int main(int argc, char **argv)
         // Read input rgba image (ppm file) and allocate space on GPU
         int img_w, img_h;
         uint8_t *rgba;
-        readPpm("resrc/airplane_4k.ppm", &img_w, &img_h, &rgba);
+        float *depth;
+        readPpm("resrc/nuclear_station.ppm", &img_w, &img_h, &rgba);
+        readDepth("resrc/nuclear_station.depth", img_w, img_h, &depth);
         PariGpuBuffer rgba_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Rgba);
+        PariGpuBuffer depth_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Depth);
         
         // Allocate output images (CPU and GPU)
         uint8_t *gray = new uint8_t[img_w * img_h];
         uint8_t *dxt1 = new uint8_t[img_w * img_h / 2];
+        uint8_t* active_pixels = new uint8_t[img_w * img_h * 8 + 8];
+        uint8_t* active_pixels_cpu = new uint8_t[img_w * img_h * 8 + 8];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
         PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
+        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel2); 
 
-        // Convert rgba to grayscale
+        // Convert rgba to grayscale, dxt1, and active pixel
+        uint32_t ap_size;
         pariRgbaBufferToGrayscale(rgba, img_w, img_h, rgba_gpu_buffer, gray_gpu_buffer, gray);
         pariRgbaBufferToDxt1(rgba, img_w, img_h, rgba_gpu_buffer, dxt1_gpu_buffer, dxt1);
+        pariRgbaDepthBufferToActivePixel2(rgba, depth, img_w, img_h, rgba_gpu_buffer, depth_gpu_buffer,
+                                          activepixel_gpu_buffer, active_pixels, &ap_size);
 
-        // Save result as pgm file
+        // Save grayscale result as pgm file
         savePgm("pari_result_gray.pgm", img_w, img_h, gray);
+        // Save dxt1 result as dds file
         saveDds("pari_result_dxt1.dds", img_w, img_h, dxt1);
-
-        // TEST - active pixel encoding
         
-        int ap_width, ap_height;
-        uint8_t *ap_rgba;
-        float *ap_depth;
-        readPpm("resrc/neurons.ppm", &ap_width, &ap_height, &ap_rgba);
-        readDepth("resrc/neurons.depth", ap_width, ap_height, &ap_depth);
-        
-        /*
-        int ap_width = 8;
-        int ap_height = 3;
-        uint8_t ap_rgba[96] = {
-            255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
-            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255,
-            0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255
-        };
-        float ap_depth[24] = {
-            1.0, 1.0, 1.0, -1.0, 0.0, 0.5, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.9, -1.0, -0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0
-        };
-        */
-        
-        uint8_t* active_pixels = new uint8_t[ap_width * ap_height * 8 + 8];
-        uint8_t* active_pixels2 = new uint8_t[ap_width * ap_height * 8 + 8];
-        uint8_t* active_pixels_cpu = new uint8_t[ap_width * ap_height * 8 + 8];
-        uint32_t ap_size;
-        uint32_t ap_size2;
-        uint32_t ap_size_cpu;
-
-        PariGpuBuffer ap_rgba_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Rgba);
-        PariGpuBuffer ap_depth_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::Depth);
-        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::ActivePixel);
-        PariGpuBuffer activepixel2_gpu_buffer = pariAllocateGpuBuffer(ap_width, ap_height, PariCompressionType::ActivePixel2);
-
-        pariRgbaBufferToActivePixel(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
-                                    activepixel_gpu_buffer, active_pixels, &ap_size);
-        pariRgbaBufferToActivePixel2(ap_rgba, ap_depth, ap_width, ap_height, ap_rgba_gpu_buffer, ap_depth_gpu_buffer,
-                                     activepixel2_gpu_buffer, active_pixels2, &ap_size2);
-
+        // Print stats from active pixel result
         uint32_t num_inactive = 0;
         uint32_t num_active = 0;
-        for (int i = 0; i < ap_width * ap_height; i++)
+        for (int i = 0; i < img_w * img_h; i++)
         {
-            if (ap_depth[i] == 1.0f) num_inactive++;
+            if (depth[i] == 1.0f) num_inactive++;
             else num_active++;
-
         }
-        printf("active: %u, inactive: %u\n", num_active, num_inactive);
-        printf("Active Pixel Buffer (%u bytes):\n", ap_size);
-        //for (int i = 0; i < ap_size; i++)
-        //{
-        //    printf(" %u", active_pixels[i]);
-        //}
-        //printf("\n");
-        printf("compression: %.3lf\n", 100.0 * (double)ap_size / (double)(ap_width * ap_height * 8));
+        printf("Active Pixel compression:\n");
+        printf(" active: %u, inactive: %u\n", num_active, num_inactive);
+        printf(" compressed size: %u bytes:\n", ap_size);
+        printf(" compression: %.3lf\n", 100.0 * (double)ap_size / (double)(img_w * img_h * 8));
 
-        printf("Active Pixel 2 Buffer (%u bytes):\n", ap_size2);
-        printf("compression: %.3lf\n", 100.0 * (double)ap_size2 / (double)(ap_width * ap_height * 8));
-
-        ap_size_cpu = rgbaDepthToActivePixelCPU(ap_width, ap_height, ap_rgba, ap_depth, active_pixels_cpu);
-        printf("Active Pixel CPU Buffer (%u bytes):\n", ap_size_cpu);
-        printf("compression: %.3lf\n", 100.0 * (double)ap_size_cpu / (double)(ap_width * ap_height * 8));
-
-        if (ap_size == ap_size2 && ap_size == ap_size_cpu)
+        uint32_t ap_size_cpu = rgbaDepthToActivePixelCPU(img_w, img_h, rgba, depth, active_pixels_cpu);
+        if (ap_size == ap_size_cpu)
         {
             int i;
             bool all_same = true;
             for (i = 0; i < ap_size; i++)
             {
-                if (active_pixels[i] != active_pixels2[i] || active_pixels[i] != active_pixels_cpu[i])
+                if (active_pixels[i] != active_pixels_cpu[i])
                 {
-                    printf("different data at position %d\n", i);
+                    printf(" GPU / CPU different data at position %d\n", i);
                     all_same = false;
                 }
             }
             if (all_same)
             {
-                printf("all 3 algorithms result in same data!\n");
+                printf(" all GPU / CPU result in same data!\n");
             }
         }
         else
         {
-            printf("sizes do not match\n");
+            printf(" GPU/CPU compressed sizes do not match\n");
         }
         /*
         Active Pixel Header Info:
@@ -384,7 +404,7 @@ uint32_t rgbaDepthToActivePixelCPU(int width, int height, uint8_t* rgba, float* 
     memcpy(result + run_start_index + 4, &active, 4);
 
     uint64_t end = currentTime();
-    printf("PARI> pariRgbaBufferToActivePixelCPU (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+    printf("rgbaDepthToActivePixelCPU (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 
     return run_start_index + 8 * active + 8;
 }

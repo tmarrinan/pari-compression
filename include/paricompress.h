@@ -31,12 +31,12 @@ PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uin
                                               PariGpuBuffer gpu_out_buf, uint8_t *gray);
 PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
                                          PariGpuBuffer gpu_out_buf, uint8_t *dxt1);
-PARI_DLLEXPORT void pariRgbaBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
-                                                PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
-PARI_DLLEXPORT void pariRgbaBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
-                                                PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
+PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                     PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                     PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
+PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
+                                                      PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
+                                                      PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
 
 // OpenGL - PARI functions
 PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResourceDescription *resrc_description_ptr);
@@ -46,6 +46,11 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
 PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
                                              uint32_t texture, PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, 
                                              uint8_t *dxt1);
+PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
+                                                         uint32_t texture_color, PariCGResource cg_resource_depth,
+                                                         PariCGResourceDescription resrc_description_depth, uint32_t texture_depth,
+                                                         PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, uint8_t *active_pixel,
+                                                         uint32_t *active_pixel_size);
 
 
 #ifdef __cplusplus
