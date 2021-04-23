@@ -114,7 +114,7 @@ int main(int argc, char **argv)
         uint8_t* active_pixels_cpu = new uint8_t[img_w * img_h * 8 + 8];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
         PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
-        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel2); 
+        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel); 
 
         // Convert rgba to grayscale, dxt1, and active pixel
         uint32_t ap_size;
@@ -184,14 +184,14 @@ int main(int argc, char **argv)
         uint8_t* active_pixels_cpu = new uint8_t[img_w * img_h * 8 + 8];
         PariGpuBuffer gray_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Grayscale);
         PariGpuBuffer dxt1_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::Dxt1);
-        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel2); 
+        PariGpuBuffer activepixel_gpu_buffer = pariAllocateGpuBuffer(img_w, img_h, PariCompressionType::ActivePixel); 
 
         // Convert rgba to grayscale, dxt1, and active pixel
         uint32_t ap_size;
         pariRgbaBufferToGrayscale(rgba, img_w, img_h, rgba_gpu_buffer, gray_gpu_buffer, gray);
         pariRgbaBufferToDxt1(rgba, img_w, img_h, rgba_gpu_buffer, dxt1_gpu_buffer, dxt1);
-        pariRgbaDepthBufferToActivePixel2(rgba, depth, img_w, img_h, rgba_gpu_buffer, depth_gpu_buffer,
-                                          activepixel_gpu_buffer, active_pixels, &ap_size);
+        pariRgbaDepthBufferToActivePixel(rgba, depth, img_w, img_h, rgba_gpu_buffer, depth_gpu_buffer,
+                                         activepixel_gpu_buffer, active_pixels, &ap_size);
 
         // Save grayscale result as pgm file
         savePgm("pari_result_gray.pgm", img_w, img_h, gray);

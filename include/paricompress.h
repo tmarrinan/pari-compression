@@ -22,7 +22,7 @@ typedef void** PariGpuBuffer;
 typedef void* PariCGResource;
 typedef void* PariCGResourceDescription;
 
-enum PariCompressionType : uint8_t { Rgba, Depth, Grayscale, Rgb, Dxt1, ActivePixel, ActivePixel2 };
+enum PariCompressionType : uint8_t { Rgba, Depth, Grayscale, Rgb, Dxt1, ActivePixel };
 
 // Standard PARI functions
 PARI_DLLEXPORT void pariSetGpuDevice(int device);
@@ -34,9 +34,6 @@ PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t
 PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
                                                      PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
                                                      PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
-PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel2(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
-                                                      PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                      PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
 
 // OpenGL - PARI functions
 PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResourceDescription *resrc_description_ptr);
