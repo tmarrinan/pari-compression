@@ -1,6 +1,7 @@
 # Makefile for Windows Visual Studio (nmake)
 
 # Set source and output directories
+INCDIR= include
 SRCDIR= src
 OBJDIR= obj
 LIBDIR= lib
@@ -8,6 +9,7 @@ LIBDIR= lib
 INC= -I.\include
 LIB= -lopengl32 -lcudart
 
+HEADER= $(INCDIR)\paricompress.h
 SRCS = $(SRCDIR)\paricompress.cu
 OBJS = $(OBJDIR)\paricompress.obj
 LIBR = $(LIBDIR)\paricompress.dll
@@ -26,6 +28,11 @@ $(OBJS): $(SRCS)
 create_dirs:
     @if not exist $(OBJDIR) mkdir $(OBJDIR)
     @if not exist $(LIBDIR) mkdir $(LIBDIR)
+    
+install:
+    copy "$(HEADER)" "$(HOMEPATH)\local\include"
+    copy "$(LIBDIR)\paricompress.lib" "$(HOMEPATH)\local\lib"
+    copy "$(LIBR)" "$(HOMEPATH)\local\bin"
 
 clean:
     del $(OBJS) $(LIBR) $(LIBR_EXTRA)
