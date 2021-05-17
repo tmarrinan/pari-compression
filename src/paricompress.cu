@@ -579,28 +579,28 @@ PARI_DLLEXPORT void pariSetGpuDevice(int device)
     cudaSetDevice(device);
 }
 
-PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariCompressionType type)
+PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariEnum type)
 {
     PariGpuBuffer buffers;
     switch (type)
     {
-        case PariCompressionType_Rgba:
+        case PARI_IMAGE_RGBA:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 4));
             break;
-        case PariCompressionType_Depth:
+        case PARI_IMAGE_DEPTH32F:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<float>(width * height));
             break;
-        case PariCompressionType_Grayscale:
+        case PARI_IMAGE_GRAYSCALE:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));
             break;
-        case PariCompressionType_Rgb:
+        case PARI_IMAGE_RGB:
             buffers = (PariGpuBuffer)malloc(sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height * 3));
             break;
-        case PariCompressionType_Dxt1:
+        case PARI_IMAGE_DXT1:
             if (width % 4 != 0 || height % 4 != 0)
             {
                 buffers = NULL;
@@ -611,7 +611,7 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
                 buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height / 2));
             }
             break;
-        case PariCompressionType_ActivePixel:
+        case PARI_IMAGE_ACTIVE_PIXEL:
             buffers = (PariGpuBuffer)malloc(7 * sizeof(void*));
             buffers[0] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel starts a new run (0 or 1)
             buffers[1] = (void*)(new thrust::device_vector<uint8_t>(width * height));         // whether or not each pixel is active (0 or 1)
@@ -626,6 +626,75 @@ PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t heig
             break;
     }
     return buffers;
+}
+
+PARI_DLLEXPORT void pariFreeGpuBuffer(PariGpuBuffer buffer, PariEnum type)
+{
+    switch (type)
+    {
+        case PARI_IMAGE_RGBA:
+            {
+                thrust::device_vector<uint8_t> *rgba = (thrust::device_vector<uint8_t>*)buffer[0];
+                rgba->clear();
+                delete rgba;
+            }
+            break;
+        case PARI_IMAGE_DEPTH32F:
+            {
+                thrust::device_vector<float> *depth = (thrust::device_vector<float>*)buffer[0];
+                depth->clear();
+                delete depth;
+            }
+            break;
+        case PARI_IMAGE_GRAYSCALE:
+            {
+                thrust::device_vector<uint8_t> *gray = (thrust::device_vector<uint8_t>*)buffer[0];
+                gray->clear();
+                delete gray;
+            }
+            break;
+        case PARI_IMAGE_RGB:
+            {
+                thrust::device_vector<uint8_t> *rgb = (thrust::device_vector<uint8_t>*)buffer[0];
+                rgb->clear();
+                delete rgb;
+            }
+            break;
+        case PARI_IMAGE_DXT1:
+            {
+                thrust::device_vector<uint8_t> *dxt1 = (thrust::device_vector<uint8_t>*)buffer[0];
+                dxt1->clear();
+                delete dxt1;
+            }
+            break;
+        case PARI_IMAGE_ACTIVE_PIXEL:
+            {
+                thrust::device_vector<uint8_t> *new_run = (thrust::device_vector<uint8_t>*)buffer[0];
+                thrust::device_vector<uint8_t> *is_active = (thrust::device_vector<uint8_t>*)buffer[1];
+                thrust::device_vector<uint32_t> *run_id = (thrust::device_vector<uint32_t>*)buffer[2];
+                thrust::device_vector<uint32_t> *run_counts = (thrust::device_vector<uint32_t>*)buffer[3];
+                thrust::device_vector<uint32_t> *active_idx = (thrust::device_vector<uint32_t>*)buffer[4];
+                thrust::device_vector<uint8_t> *ap_image = (thrust::device_vector<uint8_t>*)buffer[5];
+                thrust::device_vector<uint32_t> *ap_size = (thrust::device_vector<uint32_t>*)buffer[6];
+                new_run->clear();
+                is_active->clear();
+                run_id->clear();
+                run_counts->clear();
+                active_idx->clear();
+                ap_image->clear();
+                ap_size->clear();
+                delete new_run;
+                delete is_active;
+                delete run_id;
+                delete run_counts;
+                delete active_idx;
+                delete ap_image;
+                delete ap_size;
+            }
+            break;
+        default:
+            break;
+    }
 }
 
 PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
@@ -739,13 +808,13 @@ PARI_DLLEXPORT double pariGetTime(PariEnum time)
     double elapsed = 0.0;
     switch (time)
     {
-        case PARI_COMPUTE_TIME:
+        case PARI_TIME_COMPUTE:
             elapsed = _compute_time;
             break;
-        case PARI_MEMORY_TRANSFER_TIME:
+        case PARI_TIME_MEMORY_TRANSFER:
             elapsed = _mem_transfer_time;
             break;
-        case PARI_TOTAL_TIME:
+        case PARI_TIME_TOTAL:
             elapsed = _total_time;
             break;
     }
@@ -775,11 +844,19 @@ PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResource
     return (PariCGResource)cuda_resource;
 }
 
+PARI_DLLEXPORT void pariUnregisterImage(PariCGResource resrc, PariCGResourceDescription resrc_description)
+{
+    struct cudaGraphicsResource *cuda_resource = (struct cudaGraphicsResource *)resrc;
+    struct cudaResourceDesc *description = (struct cudaResourceDesc *)resrc_description;
+    
+    delete description;
+    cudaGraphicsUnregisterResource(cuda_resource);
+}
+
 PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
                                                   PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, uint8_t *gray)
 {
     glFinish(); // wait for OpenGL commands to finish and GPU to become available
-    //cudaDeviceSynchronize();
 
     uint64_t start = currentTime();
     
@@ -798,25 +875,32 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsGrayscale(PariCGResource cg_resource, Pa
     cudaCreateSurfaceObject(&target, &description);
     
     // Convert RGBA texture to Grayscale buffer
+    uint64_t start_compute = currentTime();
     thrust::counting_iterator<size_t> it(0);
     thrust::for_each_n(thrust::device, it, width * height, PariCGGrayscaleFunctor(target, *output_ptr, width, height));
+    cudaDeviceSynchronize();
+    uint64_t end_compute = currentTime();
 
     // Copy image data back to host
+    uint64_t start_mem_transfer = currentTime();
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height), gray);
+    uint64_t end_mem_transfer = currentTime();
 
     // Release texture for use by OpenGL again
     cudaDestroySurfaceObject(target);
     cudaGraphicsUnmapResources(1, &cuda_resource, 0);
 
     uint64_t end = currentTime();
-    printf("PARI> pariGetRgbaTextureAsGrayscale (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+
+    _compute_time = (double)(end_compute - start_compute) / 1000000.0;
+    _mem_transfer_time = (double)(end_mem_transfer - start_mem_transfer) / 1000000.0;
+    _total_time = (double)(end - start) / 1000000.0;
 }
 
 PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGResourceDescription resrc_description,
                                              PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, uint8_t *dxt1)
 {
     glFinish(); // wait for OpenGL commands to finish and GPU to become available
-    //cudaDeviceSynchronize();
 
     uint64_t start = currentTime();
     
@@ -835,20 +919,28 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
     cudaCreateSurfaceObject(&target, &description);
 
     // Convert RGBA texture to DXT1 buffer
+    uint64_t start_compute = currentTime();
     const int k = 16;                        // pixels per tile
     const int n = (width * height) / k;      // number of tiles
     thrust::counting_iterator<size_t> it(0);
     thrust::for_each_n(thrust::device, it, n, PariCGDxt1Functor(target, *output_ptr, width, height));
+    cudaDeviceSynchronize();
+    uint64_t end_compute = currentTime();
 
     // Copy image data back to host
+    uint64_t start_mem_transfer = currentTime();
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (width * height / 2), dxt1);
+    uint64_t end_mem_transfer = currentTime();
 
     // Release texture for use by OpenGL again
     cudaDestroySurfaceObject(target);
     cudaGraphicsUnmapResources(1, &cuda_resource, 0);
 
     uint64_t end = currentTime();
-    printf("PARI> pariGetRgbaTextureAsDxt1 (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
+    
+    _compute_time = (double)(end_compute - start_compute) / 1000000.0;
+    _mem_transfer_time = (double)(end_mem_transfer - start_mem_transfer) / 1000000.0;
+    _total_time = (double)(end - start) / 1000000.0;
 }
 
 PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
@@ -910,6 +1002,7 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     thrust::for_each_n(thrust::device, it, width * height, PariCGActivePixelFinalizeFunctor(target_color, target_depth,
                        *is_active_ptr, *new_run_ptr, *run_id_ptr, *run_counts_ptr, *active_idx_ptr, *output_ptr,
                        *output_size_ptr, width, height));
+    cudaDeviceSynchronize();
     uint64_t end_compute = currentTime();
 
     // Copy image data back to host
@@ -923,7 +1016,6 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     _compute_time = (double)(end_compute - start_compute) / 1000000.0;
     _mem_transfer_time = (double)(end_mem_transfer - start_mem_transfer) / 1000000.0;
     _total_time = (double)(end - start) / 1000000.0;
-    //printf("PARI> pariGetRgbaDepthTextureAsActivePixel (%dx%d): %.6lf\n", width, height, (double)(end - start) / 1000000.0);
 }
 
 PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
@@ -987,6 +1079,7 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     thrust::for_each_n(thrust::device, it, size, PariCGSubActivePixelFinalizeFunctor(target_color, target_depth,
                        *is_active_ptr, *new_run_ptr, *run_id_ptr, *run_counts_ptr, *active_idx_ptr, *output_ptr,
                        *output_size_ptr, texture_width, texture_height, texture_viewport, ap_width, ap_height, ap_viewport));
+    cudaDeviceSynchronize();
     uint64_t end_compute = currentTime();
 
     // Copy image data back to host
