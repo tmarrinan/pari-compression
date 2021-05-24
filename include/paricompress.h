@@ -36,6 +36,7 @@ typedef int PariEnum;
 
 // Standard PARI functions
 PARI_DLLEXPORT void pariSetGpuDevice(int device);
+PARI_DLLEXPORT void pariAllocateCpuBuffer(void **buffer, uint32_t size);
 PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariEnum type);
 PARI_DLLEXPORT void pariFreeGpuBuffer(PariGpuBuffer buffer, PariEnum type);
 PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,
@@ -44,7 +45,7 @@ PARI_DLLEXPORT void pariRgbaBufferToDxt1(uint8_t *rgba, uint32_t width, uint32_t
                                          PariGpuBuffer gpu_out_buf, uint8_t *dxt1);
 PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel(uint8_t *rgba, float *depth, uint32_t width, uint32_t height,
                                                      PariGpuBuffer gpu_rgba_in_buf, PariGpuBuffer gpu_depth_in_buf,
-                                                     PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *active_pixel_size);
+                                                     PariGpuBuffer gpu_out_buf, uint8_t *active_pixel, uint32_t *out_size);
 PARI_DLLEXPORT double pariGetTime(PariEnum time);
 
 // OpenGL - PARI functions
@@ -57,12 +58,11 @@ PARI_DLLEXPORT void pariGetRgbaTextureAsDxt1(PariCGResource cg_resource, PariCGR
 PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
                                                          PariCGResource cg_resource_depth, PariCGResourceDescription resrc_description_depth,
                                                          PariGpuBuffer gpu_out_buf, uint32_t width, uint32_t height, uint8_t *active_pixel,
-                                                         uint32_t *active_pixel_size);
+                                                         uint32_t *out_size);
 PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_resource_color, PariCGResourceDescription resrc_description_color,
                                                             PariCGResource cg_resource_depth, PariCGResourceDescription resrc_description_depth,
-                                                            PariGpuBuffer gpu_out_buf, uint32_t texture_width, uint32_t texture_height,
-                                                            int32_t *texture_viewport, uint32_t ap_width, uint32_t ap_height,
-                                                            int32_t *ap_viewport, uint8_t *active_pixel, uint32_t *active_pixel_size);
+                                                            PariGpuBuffer gpu_out_buf, uint32_t ap_width, uint32_t ap_height, int32_t *ap_viewport,
+                                                            int32_t *texture_viewport, uint8_t *active_pixel, uint32_t *out_size);
 
 
 #ifdef __cplusplus
