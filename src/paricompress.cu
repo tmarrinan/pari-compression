@@ -15,14 +15,37 @@
 static double _compute_time;
 static double _mem_transfer_time;
 static double _total_time;
+
+#if __CUDACC_VER_MAJOR__ < 11
 static struct cudaTextureDesc _texture_description = {
-    .addressMode = {cudaAddressModeClamp, cudaAddressModeClamp, cudaAddressModeWrap},
-    .filterMode = cudaFilterModePoint,
-    .readMode = cudaReadModeElementType,
-    .sRGB = 0,
-    .borderColor = {0.0f, 0.0f, 0.0f, 0.0f},
-    .normalizedCoords = 0
-};    
+    {cudaAddressModeClamp, cudaAddressModeClamp, cudaAddressModeWrap}, // addressMode
+    cudaFilterModePoint,                                               // filterMode
+    cudaReadModeElementType,                                           // readMode
+    0,                                                                 // sRGB
+    {0.0f, 0.0f, 0.0f, 0.0f},                                          // borderColor
+    0,                                                                 // normalizedCoords
+    0,                                                                 // maxAnisotropy
+    cudaFilterModePoint,                                               // mipmapFilterMode
+    0.0f,                                                              // mipmapLevelBias
+    0.0f,                                                              // minMipmapLevelClamp
+    0.0f                                                               // maxMipmapLevelClamp
+};
+#else
+static struct cudaTextureDesc _texture_description = {
+    {cudaAddressModeClamp, cudaAddressModeClamp, cudaAddressModeWrap}, // addressMode
+    cudaFilterModePoint,                                               // filterMode
+    cudaReadModeElementType,                                           // readMode
+    0,                                                                 // sRGB
+    {0.0f, 0.0f, 0.0f, 0.0f},                                          // borderColor
+    0,                                                                 // normalizedCoords
+    0,                                                                 // maxAnisotropy
+    cudaFilterModePoint,                                               // mipmapFilterMode
+    0.0f,                                                              // mipmapLevelBias
+    0.0f,                                                              // minMipmapLevelClamp
+    0.0f,                                                              // maxMipmapLevelClamp
+    0                                                                  // disableTrilinearOptimization
+};
+#endif    
 
 
 __host__ __device__ static void extractTile4x4(uint32_t offset, const uchar4 *pixels, int width, uchar4 out_tile[16]);
