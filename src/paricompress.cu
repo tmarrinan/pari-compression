@@ -16,18 +16,12 @@ static double _compute_time;
 static double _mem_transfer_time;
 static double _total_time;
 static struct cudaTextureDesc _texture_description = {
-    {cudaAddressModeClamp, cudaAddressModeClamp, cudaAddressModeWrap}, // addressMode
-    cudaFilterModePoint,                                               // filterMode
-    cudaReadModeElementType,                                           // readMode
-    0,                                                                 // sRGB
-    {0.0f, 0.0f, 0.0f, 0.0f},                                          // borderColor
-    0,                                                                 // normalizedCoords
-    0,                                                                 // maxAnisotropy
-    cudaFilterModePoint,                                               // mipmapFilterMode
-    0.0f,                                                              // mipmapLevelBias
-    0.0f,                                                              // minMipmapLevelClamp
-    0.0f,                                                              // maxMipmapLevelClamp
-    0,                                                                 // disableTrilinearOptimization
+    .addressMode = {cudaAddressModeClamp, cudaAddressModeClamp, cudaAddressModeWrap},
+    .filterMode = cudaFilterModePoint,
+    .readMode = cudaReadModeElementType,
+    .sRGB = 0,
+    .borderColor = {0.0f, 0.0f, 0.0f, 0.0f},
+    .normalizedCoords = 0
 };    
 
 

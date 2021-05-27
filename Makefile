@@ -17,6 +17,7 @@ ifeq ($(DETECTED_OS),Windows)
 	TESTOBJDIR= test\obj
 	TESTBINDIR= test\bin
 else
+	INCDIR= include
 	SRCDIR= src
 	OBJDIR= obj
 	LIBDIR= lib
@@ -30,7 +31,7 @@ ifeq ($(DETECTED_OS),Windows)
 	TESTINC= -I.\include -I"$(HOMEPATH)\local\include"
 	TESTLIB= -L.\lib -L"$(HOMEPATH)\local\lib" -lglfw3dll -lopengl32 -lparicompress
 else
-	INC= include
+	INC= -I./include
 	LIB= -lGL -lcudart
 	TESTINC= -I./include -I$(HOME)/local/include
 	TESTLIB= -L./lib -L$(HOME)/local/lib -lGL -lglfw -lparicompress -lcudart
@@ -47,7 +48,7 @@ ifeq ($(DETECTED_OS),Windows)
 else
 	mkdirs:= $(shell mkdir -p $(OBJDIR) $(LIBDIR) $(TESTOBJDIR) $(TESTBINDIR))
 
-	HEADER= $(addprefix $(INC)/, paricompress.h)
+	HEADER= $(addprefix $(INCDIR)/, paricompress.h)
     OBJS= $(addprefix $(OBJDIR)/, paricompress.o)
 	LIBR= $(addprefix $(LIBDIR)/, libparicompress.a)
 	TESTOBJS= $(addprefix $(TESTOBJDIR)/, sample.o)
@@ -91,9 +92,9 @@ ifeq ($(DETECTED_OS),Windows)
 	echo "PARI Compress Library must be installed using MSVC"
 else
 	install -d $(HOME)/local/lib
-    install -m 644 $(LIBR) $(HOME)/local/lib
-    install -d $(HOME)/local/include
-    install -m 644 $(HEADER) $(HOME)/local/include
+	install -m 644 $(LIBR) $(HOME)/local/lib
+	install -d $(HOME)/local/include
+	install -m 644 $(HEADER) $(HOME)/local/include
 endif
 
 # REMOVE OLD FILES
