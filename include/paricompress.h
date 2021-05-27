@@ -37,6 +37,7 @@ typedef int PariEnum;
 // Standard PARI functions
 PARI_DLLEXPORT void pariSetGpuDevice(int device);
 PARI_DLLEXPORT void pariAllocateCpuBuffer(void **buffer, uint32_t size);
+PARI_DLLEXPORT void pariFreeCpuBuffer(void *buffer);
 PARI_DLLEXPORT PariGpuBuffer pariAllocateGpuBuffer(uint32_t width, uint32_t height, PariEnum type);
 PARI_DLLEXPORT void pariFreeGpuBuffer(PariGpuBuffer buffer, PariEnum type);
 PARI_DLLEXPORT void pariRgbaBufferToGrayscale(uint8_t *rgba, uint32_t width, uint32_t height, PariGpuBuffer gpu_in_buf,

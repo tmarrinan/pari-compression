@@ -627,6 +627,20 @@ PARI_DLLEXPORT void pariSetGpuDevice(int device)
     cudaSetDevice(device);
 }
 
+PARI_DLLEXPORT void pariFreeCpuBuffer(void *buffer)
+{
+    cudaPointerAttributes attr;
+    if (cudaPointerGetAttributes(&attr, buffer) == cudaErrorInvalidValue)
+    {
+        cudaGetLastError(); // clear error - handling here
+        free(buffer);
+    }
+    else
+    {
+        cudaFreeHost(buffer);
+    }
+}
+
 PARI_DLLEXPORT void pariAllocateCpuBuffer(void **buffer, uint32_t size)
 {
     // Attempt to allocate pinned memory, but fall back to regular if it fails
