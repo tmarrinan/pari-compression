@@ -11,6 +11,9 @@ CXXFLAGS+= -std=c++11 -O2
 NVCC= nvcc
 NVCCFLAGS+= -ccbin /usr/bin -std=c++11 -O2
 
+# Install directory
+INSTALLDIR= $(HOME)/local
+
 # Set source and output directories
 ifeq ($(DETECTED_OS),Windows)
 	TESTSRCDIR= test\src
@@ -91,10 +94,10 @@ install:
 ifeq ($(DETECTED_OS),Windows)
 	echo "PARI Compress Library must be installed using MSVC"
 else
-	install -d $(HOME)/local/lib
-	install -m 644 $(LIBR) $(HOME)/local/lib
+	install -d $(INSTALLDIR)/lib
+	install -m 644 $(LIBR) $(INSTALLDIR)/lib
 	install -d $(HOME)/local/include
-	install -m 644 $(HEADER) $(HOME)/local/include
+	install -m 644 $(HEADER) $(INSTALLDIR)/include
 endif
 
 # REMOVE OLD FILES
