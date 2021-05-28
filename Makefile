@@ -96,7 +96,7 @@ ifeq ($(DETECTED_OS),Windows)
 else
 	install -d $(INSTALLDIR)/lib
 	install -m 644 $(LIBR) $(INSTALLDIR)/lib
-	install -d $(HOME)/local/include
+	install -d $(INSTALLDIR)/include
 	install -m 644 $(HEADER) $(INSTALLDIR)/include
 endif
 
