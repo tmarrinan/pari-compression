@@ -1150,6 +1150,12 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     thrust::copy(output_size_ptr->begin(), output_size_ptr->begin() + 1, out_size);
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*out_size), active_pixel);
     end_mem_transfer = currentTime();
+    
+    // Release textures for use by OpenGL again
+    cudaDestroyTextureObject(target_color);
+    cudaDestroyTextureObject(target_depth);
+    cudaGraphicsUnmapResources(1, &cuda_resource_color, 0);
+    cudaGraphicsUnmapResources(1, &cuda_resource_depth, 0);
 
     end = currentTime();
 
@@ -1232,6 +1238,12 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     // Add padding to first inactive block
     first_run = (uint32_t*)active_pixel;
     *first_run = *first_run + padding_start;
+    
+    // Release textures for use by OpenGL again
+    cudaDestroyTextureObject(target_color);
+    cudaDestroyTextureObject(target_depth);
+    cudaGraphicsUnmapResources(1, &cuda_resource_color, 0);
+    cudaGraphicsUnmapResources(1, &cuda_resource_depth, 0);
 
     end = currentTime();
 
