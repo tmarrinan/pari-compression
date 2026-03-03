@@ -61,7 +61,11 @@ static uint64_t currentTime();
 
 
 // CUDA Custom Functors
+#if CUDA_VERSION < 12040
 struct PariTransformGrayscale : public thrust::unary_function<uchar4, uint8_t>
+#else
+struct PariTransformGrayscale
+#endif
 {
     PariTransformGrayscale()
     {
@@ -113,7 +117,11 @@ struct PariForEachNDxt1
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariTransformActivePixelNewRun : public thrust::unary_function<uint32_t, uint32_t>
+#else
+struct PariTransformActivePixelNewRun
+#endif
 {
     const float *_depth;
     float _max_depth;
@@ -129,17 +137,21 @@ struct PariTransformActivePixelNewRun : public thrust::unary_function<uint32_t, 
         {
             float px_depth = _depth[n];
             float prev_depth = _depth[n - 1];
-            
+
             uint32_t px_active = (uint32_t)(px_depth != _max_depth);
             uint32_t prev_active = (uint32_t)(prev_depth != _max_depth);
-            
+
             new_run = px_active ^ prev_active; // XOR
         }
         return new_run;
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariTransformActivePixelIsActive : public thrust::unary_function<float, uint32_t>
+#else
+struct PariTransformActivePixelIsActive
+#endif
 {
     float _max_depth;
     PariTransformActivePixelIsActive()
@@ -185,12 +197,12 @@ struct PariForEachNActivePixelWrite
         {
             uint32_t run_id = _run_index[thread_id] - 1;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (run_id / 2) + 1);
-            
+
             uchar4 px_color = _rgba[thread_id];
             float px_depth = _depth[thread_id];
             memcpy(_active_pixel + write_pos, &px_color, 4);
             memcpy(_active_pixel + write_pos + 4, &px_depth, 4);
-            
+
             // pixel starts a new run
             if (thread_id == 0 || run_id > (_run_index[thread_id - 1] - 1))
             {
@@ -205,12 +217,12 @@ struct PariForEachNActivePixelWrite
         {
             float px_depth = _depth[thread_id];
             uint32_t px_active = (uint32_t)(px_depth != _max_depth);
-            
+
             uint32_t active_run = _run_index[thread_id] + px_active - 2;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (active_run / 2) + 1);
-            
+
             _active_pixel_size[0] = write_pos + 8;
-            
+
             // inactive - copy final inactive / active counts
             if (px_active == 0)
             {
@@ -231,7 +243,11 @@ struct PariForEachNActivePixelWrite
 };
 
 // OpenGL / CUDA Interop Custom Functors
+#if CUDA_VERSION < 12040
 struct PariCGTransformGrayscale : public thrust::unary_function<size_t, uint8_t>
+#else
+struct PariCGTransformGrayscale
+#endif
 {
     cudaTextureObject_t _rgba;
     uint32_t _width;
@@ -287,7 +303,11 @@ struct PariCGForEachNDxt1
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariCGTransformActivePixelNewRun : public thrust::unary_function<uint32_t, uint32_t>
+#else
+struct PariCGTransformActivePixelNewRun
+#endif
 {
     cudaTextureObject_t _depth;
     uint32_t _width;
@@ -305,17 +325,21 @@ struct PariCGTransformActivePixelNewRun : public thrust::unary_function<uint32_t
         {
             float px_depth = tex2D<float>(_depth, n % _width, n / _width);
             float prev_depth = tex2D<float>(_depth, (n - 1) % _width, (n - 1) / _width);
-            
+
             uint32_t px_active = (uint32_t)(px_depth != _max_depth);
             uint32_t prev_active = (uint32_t)(prev_depth != _max_depth);
-            
+
             new_run = px_active ^ prev_active; // XOR
         }
         return new_run;
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariCGTransformActivePixelIsActive : public thrust::unary_function<uint32_t, uint32_t>
+#else
+struct PariCGTransformActivePixelIsActive
+#endif
 {
     cudaTextureObject_t _depth;
     uint32_t _width;
@@ -368,14 +392,14 @@ struct PariCGForEachNActivePixelWrite
         {
             uint32_t run_id = _run_index[thread_id] - 1;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (run_id / 2) + 1);
-            
+
             int px_x = thread_id % _width;
             int px_y = thread_id / _width;
             uchar4 px_color = tex2D<uchar4>(_rgba, px_x, px_y);
             float px_depth = tex2D<float>(_depth, px_x, px_y);
             memcpy(_active_pixel + write_pos, &px_color, 4);
             memcpy(_active_pixel + write_pos + 4, &px_depth, 4);
-            
+
             // pixel starts a new run
             if (thread_id == 0 || run_id > (_run_index[thread_id - 1] - 1))
             {
@@ -392,12 +416,12 @@ struct PariCGForEachNActivePixelWrite
             int px_y = thread_id / _width;
             float px_depth = tex2D<float>(_depth, px_x, px_y);
             uint32_t px_active = (uint32_t)(px_depth != _max_depth);
-            
+
             uint32_t active_run = _run_index[thread_id] + px_active - 2;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (active_run / 2) + 1);
-            
+
             _active_pixel_size[0] = write_pos + 8;
-            
+
             // inactive - copy final inactive / active counts
             if (px_active == 0)
             {
@@ -417,7 +441,11 @@ struct PariCGForEachNActivePixelWrite
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariCGTransformSubActivePixelNewRun : public thrust::unary_function<uint32_t, uint32_t>
+#else
+struct PariCGTransformSubActivePixelNewRun
+#endif
 {
     cudaTextureObject_t _depth;
     uint32_t _ap_width;
@@ -448,7 +476,7 @@ struct PariCGTransformSubActivePixelNewRun : public thrust::unary_function<uint3
         {
             uint32_t px_active = isActive(n);
             uint32_t prev_active = isActive(n - 1);
-            
+
             new_run = px_active ^ prev_active; // XOR
         }
         return new_run;
@@ -464,7 +492,7 @@ struct PariCGTransformSubActivePixelNewRun : public thrust::unary_function<uint3
         {
             int px_texture_x = px_x - _ap_viewport_x + _texture_viewport_x;
             int px_texture_y = px_y - _ap_viewport_y + _texture_viewport_y;
-            
+
             float px_depth = tex2D<float>(_depth, px_texture_x, px_texture_y);
             active = (uint8_t)(px_depth != _max_depth);
         }
@@ -472,7 +500,11 @@ struct PariCGTransformSubActivePixelNewRun : public thrust::unary_function<uint3
     }
 };
 
+#if CUDA_VERSION < 12040
 struct PariCGTransformSubActivePixelIsActive : public thrust::unary_function<uint32_t, uint32_t>
+#else
+struct PariCGTransformSubActivePixelIsActive
+#endif
 {
     cudaTextureObject_t _depth;
     uint32_t _ap_width;
@@ -507,7 +539,7 @@ struct PariCGTransformSubActivePixelIsActive : public thrust::unary_function<uin
         {
             int px_texture_x = px_x - _ap_viewport_x + _texture_viewport_x;
             int px_texture_y = px_y - _ap_viewport_y + _texture_viewport_y;
-            
+
             float px_depth = tex2D<float>(_depth, px_texture_x, px_texture_y);
             active = (uint32_t)(px_depth != _max_depth);
         }
@@ -561,7 +593,7 @@ struct PariCGForEachNSubActivePixelWrite
         {
             uint32_t run_id = _run_index[thread_id] - 1;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (run_id / 2) + 1);
-            
+
             int px_x = thread_id % _ap_width;
             int px_y = thread_id / _ap_width + _ap_viewport_y;
             int px_texture_x = px_x - _ap_viewport_x + _texture_viewport_x;
@@ -570,7 +602,7 @@ struct PariCGForEachNSubActivePixelWrite
             float px_depth = tex2D<float>(_depth, px_texture_x, px_texture_y);
             memcpy(_active_pixel + write_pos, &px_color, 4);
             memcpy(_active_pixel + write_pos + 4, &px_depth, 4);
-            
+
             // pixel starts a new run
             if (thread_id == 0 || run_id > (_run_index[thread_id - 1] - 1))
             {
@@ -589,15 +621,15 @@ struct PariCGForEachNSubActivePixelWrite
             int px_texture_y = px_y - _ap_viewport_y + _texture_viewport_y;
             float px_depth = tex2D<float>(_depth, px_texture_x, px_texture_y);
             uint32_t px_active = (uint32_t)(px_depth != _max_depth);
-            
+
             uint32_t active_run = _run_index[thread_id] + px_active - 2;
             uint32_t write_pos = 8 * (_active_index[thread_id] + (active_run / 2) + 1);
-            
+
             // inactive - copy final inactive / active counts
             if (px_active == 0)
             {
                 _active_pixel_size[0] = write_pos + 8;
-                
+
                 uint32_t num_inactive = _run_counts[_run_index[thread_id] - 1] + _padding_end;
                 uint32_t num_active = 0;
                 memcpy(_active_pixel + write_pos, &num_inactive, 4);
@@ -607,7 +639,7 @@ struct PariCGForEachNSubActivePixelWrite
             else if (_padding_end == 0)
             {
                 _active_pixel_size[0] = write_pos + 8;
-                
+
                 uchar4 px_color = tex2D<uchar4>(_rgba, px_texture_x, px_texture_y);
                 memcpy(_active_pixel + write_pos, &px_color, 4);
                 memcpy(_active_pixel + write_pos + 4, &px_depth, 4);
@@ -616,11 +648,11 @@ struct PariCGForEachNSubActivePixelWrite
             else
             {
                 _active_pixel_size[0] = write_pos + 16;
-                
+
                 uchar4 px_color = tex2D<uchar4>(_rgba, px_texture_x, px_texture_y);
                 memcpy(_active_pixel + write_pos, &px_color, 4);
                 memcpy(_active_pixel + write_pos + 4, &px_depth, 4);
-                
+
                 uint32_t num_inactive = _padding_end;
                 uint32_t num_active = 0;
                 memcpy(_active_pixel + write_pos + 8, &num_inactive, 4);
@@ -803,7 +835,7 @@ PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResource
 {
     struct cudaGraphicsResource *cuda_resource;
     struct cudaResourceDesc **description_ptr = (struct cudaResourceDesc **)resrc_description_ptr;
-    
+
     // NOTE: GL_DEPTH_COMPONENT not supported - only the following:
     //  - GL_RED, GL_RG, GL_RGBA, GL_LUMINANCE, GL_ALPHA, GL_LUMINANCE_ALPHA, GL_INTENSITY
     //  - {GL_R, GL_RG, GL_RGBA} X {8, 16, 16F, 32F, 8UI, 16UI, 32UI, 8I, 16I, 32I}
@@ -817,7 +849,7 @@ PARI_DLLEXPORT PariCGResource pariRegisterImage(uint32_t texture, PariCGResource
     *description_ptr = new struct cudaResourceDesc();
     memset(*description_ptr, 0, sizeof(struct cudaResourceDesc));
     (*description_ptr)->resType = cudaResourceTypeArray;
-    
+
     return (PariCGResource)cuda_resource;
 }
 
@@ -825,7 +857,7 @@ PARI_DLLEXPORT void pariUnregisterImage(PariCGResource resrc, PariCGResourceDesc
 {
     struct cudaGraphicsResource *cuda_resource = (struct cudaGraphicsResource *)resrc;
     struct cudaResourceDesc *description = (struct cudaResourceDesc *)resrc_description;
-    
+
     delete description;
     cudaGraphicsUnregisterResource(cuda_resource);
 }
@@ -925,7 +957,11 @@ PARI_DLLEXPORT void pariRgbaDepthBufferToActivePixel(uint8_t *rgba, float *depth
     thrust::device_vector<uint8_t> *output_ptr;
     thrust::device_vector<uint32_t> *output_size_ptr;
     thrust::counting_iterator<size_t> it(0);
+#if CUDA_VERSION < 12000
     thrust::plus<uint32_t> uint_sum;
+#else
+    cuda::std::plus<uint32_t> uint_sum;
+#endif
 
     start = currentTime();
     size = width * height;
@@ -1099,8 +1135,12 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     thrust::device_vector<uint8_t> *output_ptr;
     thrust::device_vector<uint32_t> *output_size_ptr;
     thrust::counting_iterator<size_t> it(0);
+#if CUDA_VERSION < 12000
     thrust::plus<uint32_t> uint_sum;
-    
+#else
+    cuda::std::plus<uint32_t> uint_sum;
+#endif
+
     // Wait for OpenGL commands to finish and GPU to become available
     glFinish();
 
@@ -1117,7 +1157,7 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     cuda_resource_depth = (struct cudaGraphicsResource *)cg_resource_depth;
     description_color = *(struct cudaResourceDesc *)resrc_description_color;
     description_depth = *(struct cudaResourceDesc *)resrc_description_depth;
-    
+
     // Enable CUDA to access OpenGL texture
     cudaGraphicsMapResources(1, &cuda_resource_color, 0);
     cudaGraphicsSubResourceGetMappedArray(&array_color, cuda_resource_color, 0, 0);
@@ -1150,7 +1190,7 @@ PARI_DLLEXPORT void pariGetRgbaDepthTextureAsActivePixel(PariCGResource cg_resou
     thrust::copy(output_size_ptr->begin(), output_size_ptr->begin() + 1, out_size);
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*out_size), active_pixel);
     end_mem_transfer = currentTime();
-    
+
     // Release textures for use by OpenGL again
     cudaDestroyTextureObject(target_color);
     cudaDestroyTextureObject(target_depth);
@@ -1182,15 +1222,19 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     thrust::device_vector<uint8_t> *output_ptr;
     thrust::device_vector<uint32_t> *output_size_ptr;
     thrust::counting_iterator<size_t> it(0);
+#if CUDA_VERSION < 12000
     thrust::plus<uint32_t> uint_sum;
-    
+#else
+    cuda::std::plus<uint32_t> uint_sum;
+#endif
+
     // Wait for OpenGL commands to finish and GPU to become available
     glFinish();
-    
+
     start = currentTime();
     padding_start = ap_viewport[1] * ap_width;
     size = ap_width * ap_viewport[3];
-    
+
     // Get handles to input and output image pointers
     run_id_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[0]);
     run_counts_ptr = (thrust::device_vector<uint32_t>*)(gpu_out_buf[1]);
@@ -1201,7 +1245,7 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     cuda_resource_depth = (struct cudaGraphicsResource *)cg_resource_depth;
     description_color = *(struct cudaResourceDesc *)resrc_description_color;
     description_depth = *(struct cudaResourceDesc *)resrc_description_depth;
-    
+
     // Enable CUDA to access OpenGL texture
     cudaGraphicsMapResources(1, &cuda_resource_color, 0);
     cudaGraphicsSubResourceGetMappedArray(&array_color, cuda_resource_color, 0, 0);
@@ -1211,7 +1255,7 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     cudaGraphicsSubResourceGetMappedArray(&array_depth, cuda_resource_depth, 0, 0);
     description_depth.res.array.array = array_depth;
     cudaCreateTextureObject(&target_depth, &description_depth, &_texture_description, NULL);
-    
+
     // Convert RGBA and Depth buffers to Active Pixel buffer
     start_compute = currentTime();
     //   - id for each run
@@ -1234,11 +1278,11 @@ PARI_DLLEXPORT void pariGetSubRgbaDepthTextureAsActivePixel(PariCGResource cg_re
     thrust::copy(output_size_ptr->begin(), output_size_ptr->begin() + 1, out_size);
     thrust::copy(output_ptr->begin(), output_ptr->begin() + (*out_size), active_pixel);
     end_mem_transfer = currentTime();
-    
+
     // Add padding to first inactive block
     first_run = (uint32_t*)active_pixel;
     *first_run = *first_run + padding_start;
-    
+
     // Release textures for use by OpenGL again
     cudaDestroyTextureObject(target_color);
     cudaDestroyTextureObject(target_depth);
@@ -1348,7 +1392,7 @@ uint32_t colorIndices(uchar4 tile[16], uchar3 &color_min, uchar3 &color_max)
             }
         }
     }
-    
+
     result = 0;
     for (i = 0; i < 16; i++)
     {

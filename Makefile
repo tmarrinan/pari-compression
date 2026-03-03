@@ -7,9 +7,9 @@ endif
 
 # Set compiler and flags
 CXX= g++
-CXXFLAGS+= -std=c++11 -O2
+CXXFLAGS+= -std=c++17 -O2
 NVCC= nvcc
-NVCCFLAGS+= -ccbin /usr/bin -std=c++11 -O2
+NVCCFLAGS+= -ccbin /usr/bin -std=c++17 -O2
 
 # Install directory
 INSTALLDIR= $(HOME)/local
